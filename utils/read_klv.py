@@ -81,6 +81,39 @@ def extract_klv_from_video(video_file):
         return None
 
 
+def _checksum_text(valid):
+    """Human-readable form of a packet's ST 0601 item 1 verification result"""
+    if valid is None:
+        return 'not present (ST 0601 requires item 1)'
+    return 'valid' if valid else 'INVALID - packet should be discarded'
+
+
+def _format_item(item):
+    """Format one decoded ST 0601 item for the console"""
+    name = item.get('name', f"Tag {item.get('tag_id')}")
+    value = item.get('value')
+    units = item.get('units', '')
+
+    if item.get('out_of_range'):
+        return f"{name:34s}: out of range ({item.get('raw_value')})"
+    if not item.get('decoded'):
+        return f"{name:34s}: {value} (raw, not decoded)"
+    if isinstance(value, dict):  # enumerated item
+        return f"{name:34s}: {value.get('name')} ({value.get('code')})"
+
+    if item.get('tag_id') in (2, 72) and isinstance(value, (int, float)):
+        dt = datetime.fromtimestamp(value, tz=timezone.utc)
+        return f"{name:34s}: {dt.isoformat()} ({value:.6f})"
+    if isinstance(value, float):
+        text = f"{name:34s}: {value:.6f}" if units == 'degrees' else f"{name:34s}: {value:.2f}"
+        if units:
+            text += '°' if units == 'degrees' else f' {units}'
+        if 'absolute_value' in item:
+            text += f" (absolute: {item['absolute_value']:.6f}°)"
+        return text
+    return f"{name:34s}: {value}{' ' + units if units else ''}"
+
+
 def read_klv_file(klv_file_path, is_temp=False):
     """Read and parse KLV packets from binary file"""
     print(f"\n{'='*70}")
@@ -160,11 +193,15 @@ def read_klv_file(klv_file_path, is_temp=False):
         print(f"Error reading file: {e}")
         return None
     
-    print(f"Total Packets: {len(packets)}\n")
-    
+    print(f"Total Packets: {len(packets)}")
+
     if not packets:
         print("No packets found in file")
         return
+
+    valid = sum(1 for p in packets if p.get('checksum_valid') is True)
+    absent = sum(1 for p in packets if p.get('checksum_valid') is None)
+    print(f"Checksums:     {valid} valid, {len(packets) - valid - absent} invalid, {absent} absent\n")
     
     # Display summary
     print(f"{'='*70}")
@@ -177,36 +214,13 @@ def read_klv_file(klv_file_path, is_temp=False):
     first = packets[0]
     print(f"Timestamp: {first.get('timestamp', 'N/A')}")
     print(f"Raw Size: {first.get('raw_size', 0)} bytes")
-    print(f"Tags Found: {len(first.get('tags', {}))}\n")
-    
-    if 'tags' in first:
-        for tag_name, tag_info in sorted(first['tags'].items()):
-            value = tag_info.get('value')
-            
-            # Format timestamp nicely
-            if tag_name == 'UNIX Time Stamp' and isinstance(value, (int, float)):
-                dt = datetime.fromtimestamp(value, tz=timezone.utc)
-                print(f"  {tag_name:30s}: {dt.isoformat()} ({value:.6f})")
-            # Format coordinates
-            elif 'Latitude' in tag_name or 'Longitude' in tag_name:
-                if isinstance(value, (int, float)):
-                    print(f"  {tag_name:30s}: {value:.6f}°")
-                else:
-                    print(f"  {tag_name:30s}: {value}")
-            # Format altitude/elevation
-            elif 'Altitude' in tag_name or 'Elevation' in tag_name:
-                if isinstance(value, (int, float)):
-                    print(f"  {tag_name:30s}: {value:.2f} m")
-                else:
-                    print(f"  {tag_name:30s}: {value}")
-            # Format angles
-            elif 'Angle' in tag_name or 'Heading' in tag_name:
-                if isinstance(value, (int, float)):
-                    print(f"  {tag_name:30s}: {value:.2f}°")
-                else:
-                    print(f"  {tag_name:30s}: {value}")
-            else:
-                print(f"  {tag_name:30s}: {value}")
+    print(f"Items Found: {len(first.get('items', first.get('tags', {})))}")
+    print(f"Checksum: {_checksum_text(first.get('checksum_valid'))}\n")
+
+    # Items are printed in packet order; ST 0601 permits some items to repeat
+    # and their order carries meaning, so do not sort them.
+    for item in first.get('items', []):
+        print(f"  {_format_item(item)}")
     
     # Show timing information
     if len(packets) > 1:
@@ -219,9 +233,9 @@ def read_klv_file(klv_file_path, is_temp=False):
         
         # Calculate timing
         if 'tags' in first and 'tags' in last:
-            first_time = first['tags'].get('UNIX Time Stamp', {}).get('value')
-            last_time = last['tags'].get('UNIX Time Stamp', {}).get('value')
-            
+            first_time = first['tags'].get('Precision Time Stamp', {}).get('value')
+            last_time = last['tags'].get('Precision Time Stamp', {}).get('value')
+
             if first_time and last_time:
                 duration = last_time - first_time
                 rate = (len(packets) - 1) / duration if duration > 0 else 0

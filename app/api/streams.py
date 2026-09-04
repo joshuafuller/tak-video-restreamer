@@ -541,14 +541,20 @@ def _build_pull_ffmpeg_args(source_url: str, stream_name: str) -> list:
     is_rtsp = source_url.lower().startswith(('rtsp://', 'rtsps://'))
     args = ['ffmpeg', '-loglevel', 'warning']  # suppress frame= progress lines
     if is_rtsp:
+        # The RTSP demuxer's own -timeout (microseconds) is both the connect and
+        # the per-read timeout, so FFmpeg fails fast if the device connects but
+        # stops sending data (e.g. a GStreamer server that starts before it
+        # encodes). Do not add -rw_timeout here: that is an AVIO/protocol option
+        # the RTSP demuxer does not accept, and FFmpeg 7.x aborts the whole input
+        # with "Option rw_timeout not found" rather than ignoring it.
         args.extend([
             '-rtsp_transport', transport,
             '-timeout', str(timeout_us),
-            # Hard per-read timeout so FFmpeg fails fast if the device connects
-            # but stops sending data (e.g. GStreamer server starts before encoding).
-            # Without this, FFmpeg hangs for several minutes before giving up.
-            '-rw_timeout', str(timeout_us),
         ])
+    elif source_url.lower().startswith(('http://', 'https://')):
+        # -rw_timeout is an AVIO option, so it is valid for the HTTP protocol
+        # handler (and gives HTTP/HLS pulls the same fail-fast read timeout).
+        args.extend(['-rw_timeout', str(timeout_us)])
     args.extend([
         '-buffer_size', str(PULL_STREAM_BUFFER_SIZE),
         '-max_delay', str(PULL_STREAM_MAX_DELAY),

@@ -69,12 +69,17 @@ To report a security vulnerability, please open a private security advisory on G
 ## Features
 
 ### KLV Metadata Processing (MISB ST 0601.19)
-- **Complete STANAG 4609 compliance** - All 89 tags supported
+- All 142 ST 0601.19 items are identified by name; items 1–93 are fully decoded with
+  their specified ranges, scale factors, and out-of-range indicators. Items 94–142 are
+  reported with their raw bytes and `decoded: false` where the conversion is not yet
+  implemented, rather than being given a guessed one
+- **Checksum (item 1)** written on every generated packet and verified on every parsed one
+- BER-OID item keys and BER lengths handled separately, per ST 0601.19 §7.1
+- Repeated items are preserved in packet order (ST 0601.19 Table 1 allows some to repeat)
 - Read KLV from MOV/MP4/TS files or raw `.klv.bin` dumps (`utils/read_klv.py`)
 - KLV data tracks carried end-to-end on ingest — see [KLV transport constraints](#klv-transport-constraints)
 - **Automatic KLV timestamp repair** for UAS feeds that stamp metadata with B-frame timestamps
 - **Preflight validation** of KLV integrity and TAK client compatibility, via CLI, REST API, and the web UI
-- Direct binary parser with BER length encoding support
 - NaN/Infinity sanitization for valid JSON output
 
 ### Recording with Re-encoding
