@@ -13,29 +13,64 @@
 }
 
 :root {
-    /* Color Palette - Dark Theme */
-    --primary-bg: #0f172a;
-    --secondary-bg: #1e293b;
-    --card-bg: #334155;
-    --surface-bg: #475569;
-    --accent-primary: #3b82f6;
-    --accent-secondary: #06b6d4;
-    --accent-success: #10b981;
-    --accent-warning: #f59e0b;
-    --accent-danger: #ef4444;
-    --text-primary: #f8fafc;
-    --text-secondary: #cbd5e1;
-    --text-muted: #94a3b8;
-    --border-color: #475569;
-    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-    --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
-    
-    /* Typography */
-    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    --font-mono: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
-    
+    /* ── UMT shared tokens ────────────────────────────────────────────────
+       The visual language comes from umt-shared.css (vendored from
+       umt-plugin/tak-ui-shared). This block maps this app's original token
+       names onto it, so every existing var() reference in this file and in
+       the page markup picks up the UMT palette without being rewritten.
+
+       Prefer the UMT names (--bg, --surface, --ink, --line, --accent) in new
+       code. The --primary-bg / --text-primary style names below are kept
+       only so the older rules keep resolving.
+       ───────────────────────────────────────────────────────────────────── */
+
+    /* Two upstream bugs in umt-shared.css, patched here so the vendored copy
+       stays byte-identical to upstream and therefore diffable. See
+       umt-shared.README.md. */
+    --mono: 'Consolas', 'Menlo', 'Monaco', 'Courier New', monospace;
+
+    /* Fourth surface level. UMT defines three (--bg / --surface /
+       --surface-strong); this app nests one level deeper in places
+       (thumbnails, inset wells), so this sits just above --surface-strong. */
+    --surface-lift: #1b2630;
+
+    /* Cyan accent. Not a token in tak-ui-shared, but its .scoreboard-card
+       uses this exact value as the default rail colour, so it is part of the
+       language rather than an invention. */
+    --cyan: #65c9e8;
+
+    /* ── Legacy aliases ── */
+    --primary-bg: var(--bg);
+    --secondary-bg: var(--surface);
+    --card-bg: var(--surface-strong);
+    --surface-bg: var(--surface-lift);
+    --accent-primary: var(--accent);
+    --accent-secondary: var(--cyan);
+    --accent-success: var(--good);
+    --accent-warning: var(--warn);
+    --accent-danger: var(--danger);
+    --text-primary: var(--ink);
+
+    /* UMT runs two text levels (--ink / --muted) where this app ran three.
+       Secondary collapses onto --muted to match; the third level drops to a
+       dimmer value that UMT itself uses for de-emphasised captions. */
+    --text-secondary: var(--muted);
+    --text-muted: #6f7e89;
+
+    --border-color: var(--line);
+
+    /* UMT ships a single, heavy --shadow (0 18px 40px) intended for panels and
+       modals. Applying it to every list row would be far too much, so the
+       small step stays subtle and the larger steps resolve to the real token. */
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.25);
+    --shadow-md: var(--shadow);
+    --shadow-lg: var(--shadow);
+    --shadow-xl: var(--shadow);
+
+    /* Typography — matches umt-shared.css */
+    --font-sans: 'Segoe UI', Inter, Arial, sans-serif;
+    --font-mono: var(--mono);
+
     /* Spacing */
     --spacing-xs: 0.25rem;
     --spacing-sm: 0.5rem;
@@ -43,16 +78,37 @@
     --spacing-lg: 1.5rem;
     --spacing-xl: 2rem;
     --spacing-2xl: 3rem;
-    
-    /* Border Radius */
-    --radius-sm: 0.25rem;
-    --radius-md: 0.5rem;
-    --radius-lg: 0.75rem;
-    --radius-xl: 1rem;
+
+    /* Radius. UMT is flatter than this app was: 8px is its workhorse, 6px for
+       small controls, 999px for pills. Nothing in UMT is as round as the 16px
+       this app used for cards. */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 8px;
+    --radius-pill: 999px;
+
+    /* Status washes, derived from the UMT palette rather than the old one.
+       (The previous sheet tinted with #10b981 / #ef4444, which are not UMT
+       colours, so the washes drifted away from the chips they sat next to.) */
+    --tint-accent:   rgba(59, 130, 246, 0.12);
+    --tint-accent-2: rgba(59, 130, 246, 0.22);
+    --tint-good:     rgba(101, 225, 160, 0.12);
+    --tint-warn:     rgba(244, 184, 91, 0.12);
+    --tint-danger:   rgba(239, 107, 104, 0.12);
+    --tint-cyan:     rgba(101, 201, 232, 0.12);
+
+    /* Solid status-chip backgrounds. These are umt-shared.css's own
+       .pill--good / --warn / --danger values. */
+    --chip-good:   #0d2e1e;
+    --chip-warn:   #3a2f17;
+    --chip-danger: #2e1215;
+    --chip-accent: #15253c;
 }
 
 body {
     font-family: var(--font-sans);
+    font-size: 15px;
     background: var(--primary-bg);
     min-height: 100vh;
     color: var(--text-primary);
@@ -163,9 +219,10 @@ header h1 {
 }
 
 .nav-link.active {
-    color: var(--accent-primary);
-    background: rgba(59, 130, 246, 0.1);
-    border-color: var(--accent-primary);
+    color: var(--ink);
+    background: var(--tint-accent-2);
+    border-color: transparent;
+    box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 /* Card Components */
@@ -178,14 +235,11 @@ header h1 {
 }
 
 .card h2 {
-    color: #ffffff;
-    background: linear-gradient(135deg, #3b82f6, #1976d2);
-    padding: 12px 16px;
-    border-radius: var(--radius-md);
+    color: var(--ink);
+    padding: 0 0 var(--spacing-md) 0;
     margin: 0 0 var(--spacing-lg) 0;
-    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
-    border-left: 4px solid #1e40af;
-    font-size: 1.15rem;
+    border-bottom: 1px solid var(--line);
+    font-size: 1.25rem;
     font-weight: 600;
     display: flex;
     align-items: center;
@@ -267,9 +321,9 @@ header h1 {
     align-items: center;
     justify-content: space-between;
     padding: var(--spacing-sm) var(--spacing-md);
-    background: rgba(71, 85, 105, 0.3);
+    background: var(--surface-strong);
     border-radius: var(--radius-md);
-    border: 1px solid rgba(71, 85, 105, 0.4);
+    border: 1px solid var(--line);
 }
 
 .connection-label {
@@ -335,7 +389,7 @@ header h1 {
 /* Force stream name visibility */
 .stream-item .stream-name,
 .stream-item .stream-header .stream-name {
-    color: #06b6d4 !important; /* Force bright cyan */
+    color: var(--cyan) !important;
 }
 
 .stream-name::selection {
@@ -364,7 +418,7 @@ header h1 {
 }
 
 .stream-status.reconnecting {
-    color: #f59e0b;
+    color: var(--warn);
     animation: reconnectingPulse 1.5s ease-in-out infinite;
 }
 
@@ -602,8 +656,8 @@ header h1 {
 
 .keywords-input:focus {
     outline: none;
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--tint-accent);
 }
 
 .keywords-input::placeholder {
@@ -657,21 +711,21 @@ header h1 {
 }
 
 .status-badge.enabled {
-    background: rgba(16, 185, 129, 0.1);
+    background: var(--tint-good);
     color: var(--accent-success);
-    border: 1px solid rgba(16, 185, 129, 0.2);
+    border: 1px solid rgba(101, 225, 160, 0.25);
 }
 
 .status-badge.disabled {
-    background: rgba(239, 68, 68, 0.1);
+    background: var(--tint-danger);
     color: var(--accent-danger);
-    border: 1px solid rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 107, 104, 0.25);
 }
 
 .badge.uas-enabled {
-    background: rgba(59, 130, 246, 0.1);
+    background: var(--tint-accent);
     color: var(--accent-primary);
-    border: 1px solid rgba(59, 130, 246, 0.2);
+    border: 1px solid rgba(59, 130, 246, 0.25);
     padding: var(--spacing-xs) var(--spacing-sm);
     border-radius: var(--radius-sm);
     font-size: 0.75rem;
@@ -725,12 +779,12 @@ header h1 {
 }
 
 .btn-stop-recording {
-    background: var(--accent-danger) !important;
-    color: #fff !important;
-    border-color: var(--accent-danger) !important;
+    background: var(--surface) !important;
+    color: var(--danger) !important;
+    border-color: var(--line) !important;
 }
 .btn-stop-recording:hover {
-    background: #dc2626 !important;
+    background: var(--chip-danger) !important;
 }
 
 /* Protocol badges */
@@ -738,9 +792,9 @@ header h1 {
     display: inline-flex;
     align-items: center;
     padding: 2px 8px;
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-pill);
     font-size: 0.7rem;
-    font-weight: 600;
+    font-weight: 800;
     letter-spacing: 0.5px;
     text-transform: uppercase;
     margin-left: 6px;
@@ -748,33 +802,33 @@ header h1 {
 }
 
 .protocol-srt {
-    background: rgba(59, 130, 246, 0.15);
-    color: #60a5fa;
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    background: var(--chip-accent);
+    color: var(--accent);
+    border: 1px solid transparent;
 }
 
 .protocol-rtsp {
-    background: rgba(34, 197, 94, 0.15);
-    color: #4ade80;
-    border: 1px solid rgba(34, 197, 94, 0.3);
+    background: var(--chip-good);
+    color: var(--good);
+    border: 1px solid transparent;
 }
 
 .protocol-rtmp {
-    background: rgba(249, 115, 22, 0.15);
-    color: #fb923c;
-    border: 1px solid rgba(249, 115, 22, 0.3);
+    background: var(--chip-warn);
+    color: var(--warn);
+    border: 1px solid transparent;
 }
 
 .protocol-webrtc {
-    background: rgba(168, 85, 247, 0.15);
-    color: #c084fc;
-    border: 1px solid rgba(168, 85, 247, 0.3);
+    background: rgba(101, 201, 232, 0.14);
+    color: var(--cyan);
+    border: 1px solid transparent;
 }
 
 .protocol-default {
-    background: rgba(148, 163, 184, 0.15);
-    color: #94a3b8;
-    border: 1px solid rgba(148, 163, 184, 0.3);
+    background: var(--surface-strong);
+    color: var(--muted);
+    border: 1px solid var(--line);
 }
 
 
@@ -812,7 +866,7 @@ header h1 {
     flex-direction: column;
     align-items: center;
     padding: var(--spacing-sm) var(--spacing-md);
-    background: rgba(59, 130, 246, 0.1);
+    background: var(--tint-accent);
     border: 1px solid rgba(59, 130, 246, 0.3);
     border-radius: var(--radius-md);
     min-width: 80px;
@@ -946,27 +1000,36 @@ header h1 {
 }
 
 .btn-primary {
-    background: var(--accent-primary);
-    color: white;
-    border-color: var(--accent-primary);
+    background: var(--accent);
+    color: #ffffff;
+    border-color: var(--accent);
 }
 
 .btn-secondary {
-    background: var(--card-bg);
-    color: var(--text-primary);
-    border-color: var(--border-color);
+    background: var(--surface);
+    color: var(--ink);
+    border-color: var(--line);
 }
 
 .btn-danger {
-    background: var(--accent-danger);
-    color: white;
-    border-color: var(--accent-danger);
+    background: transparent;
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+.btn-danger:hover {
+    background: var(--chip-danger);
 }
 
 .btn-warning {
-    background: var(--accent-warning);
-    color: white;
-    border-color: var(--accent-warning);
+    background: var(--surface);
+    color: var(--warn);
+    border-color: var(--line);
+}
+
+.btn-warning:hover {
+    background: var(--chip-warn);
+    border-color: var(--warn);
 }
 
 .btn-small {
@@ -975,7 +1038,7 @@ header h1 {
 }
 
 .btn-small.btn-primary {
-    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    background: var(--accent);
 }
 
 /* Stream details modal URL list + inline player */
@@ -984,29 +1047,31 @@ header h1 {
 .url-section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 6px; font-weight: 600; }
 .url-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
 .url-label { font-size: 12px; font-weight: 600; color: var(--text-muted); min-width: 72px; }
-.url-code { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--bg-secondary, #1e1e1e); padding: 3px 7px; border-radius: 4px; border: 1px solid var(--border-color); }
+.url-code { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--surface-strong); padding: 3px 7px; border-radius: 4px; border: 1px solid var(--border-color); }
 .btn-tiny { padding: 2px 8px !important; font-size: 11px !important; white-space: nowrap; }
 /* ABR toggle button states */
 .btn-abr-active {
-    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-    color: white;
-    border-color: #059669;
+    background: var(--good);
+    color: #06210f;
+    border-color: var(--good);
 }
 
 .btn-abr-inactive {
-    background: var(--card-bg);
-    color: var(--text-primary);
-    border-color: var(--border-color);
+    background: var(--surface);
+    color: var(--ink);
+    border-color: var(--line);
 }
 
-.btn-small.btn-secondary {
-    background: var(--card-bg);
-    border-color: var(--border-color);
-}
 
 .btn-success {
-    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-    color: white;
+    background: var(--good);
+    border-color: var(--good);
+    color: #06210f;
+}
+
+.btn-success:hover,
+.btn-abr-active:hover {
+    background: #4fd28c;
 }
 
 /* Stream Controls */
@@ -1027,11 +1092,11 @@ header h1 {
 .connection-info h3 {
     margin: 20px 0 10px 0;
     padding: 8px 12px;
-    background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-    border-radius: 6px;
-    border-left: 4px solid #4f46e5;
+    background: var(--surface-strong);
+    border-radius: var(--radius-md);
+    border-left: 3px solid var(--accent);
     font-size: 1rem;
-    color: #374151;
+    color: var(--ink);
 }
 
 .connection-info h3:first-child {
@@ -1054,17 +1119,18 @@ header h1 {
     top: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0,0,0,0.5);
+    background-color: rgba(8, 15, 23, 0.6);
     animation: fadeIn 0.3s ease;
 }
 
 .modal-content {
-    background-color: var(--card-bg);
+    background-color: var(--surface);
     margin: 5% auto;
-    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: var(--radius-lg);
     width: 90%;
     max-width: 500px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+    box-shadow: 0 30px 80px rgba(8, 15, 23, 0.32);
     animation: slideIn 0.3s ease;
 }
 
@@ -1129,8 +1195,8 @@ header h1 {
 .form-group input[type="password"]:focus,
 .form-group select:focus {
     outline: none;
-    border-color: var(--primary-color);
-    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--tint-accent);
 }
 
 .form-group small {
@@ -1157,7 +1223,7 @@ header h1 {
 .no-data,
 .no-recordings {
     text-align: center;
-    color: #64748b;
+    color: var(--text-muted);
     font-style: italic;
     padding: 40px 20px;
 }
@@ -1235,8 +1301,7 @@ header h1 {
     color: var(--accent-success);
     margin-top: 0;
     font-size: 1.2em;
-    font-weight: bold;
-    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+    font-weight: 600;
 }
 
 .test-card p {
@@ -1327,9 +1392,8 @@ header h1 {
 }
 
 .protocol-tab.active {
-    background: var(--accent-primary);
-    color: white;
-    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.7);
+    background: var(--accent);
+    color: #ffffff;
 }
 
 .protocol-content {
@@ -1394,15 +1458,15 @@ header h1 {
 
 /* Override form-group for test page dark theme */
 .test-container .form-group label {
-    color: #e0e0e0;
+    color: var(--ink);
     text-align: left;
 }
 
 .test-container .form-group input,
 .test-container .form-group select {
-    background: #2a2a2a;
-    color: #e0e0e0;
-    border: 1px solid #444;
+    background: var(--surface-strong);
+    color: var(--ink);
+    border: 1px solid var(--line);
     font-size: 14px;
     padding: 10px;
 }
@@ -1412,43 +1476,44 @@ header h1 {
 }
 
 .test-container .form-group input::placeholder {
-    color: #888;
+    color: var(--text-muted);
 }
 
 /* Status boxes for test page */
 .test-container .status-box {
     margin-top: 20px;
     padding: 15px;
-    border-radius: 8px;
-    background: #2a2a2a;
-    color: #e0e0e0;
+    border-radius: var(--radius-lg);
+    background: var(--surface-strong);
+    color: var(--ink);
 }
 
 .test-container .status-box.success {
-    background: #1e4d2b;
-    border: 1px solid #2d7a3e;
-    color: #a8e6b0;
+    background: var(--chip-good);
+    border: 1px solid rgba(101, 225, 160, 0.25);
+    color: var(--good);
 }
 
 .test-container .status-box.error {
-    background: #4d1e1e;
-    border: 1px solid #7a2d2d;
-    color: #e6a8a8;
+    background: var(--chip-danger);
+    border: 1px solid rgba(239, 107, 104, 0.25);
+    color: var(--danger);
 }
 
 .test-container .status-box.info {
-    background: #1e2a4d;
-    border: 1px solid #2d3e7a;
-    color: #a8c8e6;
+    background: var(--chip-accent);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    color: var(--accent);
 }
 
 /* Log box for test page */
 .log-box {
     margin-top: 20px;
     padding: 15px;
-    background: #1e1e1e;
-    color: #d4d4d4;
-    border-radius: 8px;
+    background: var(--bg);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
     font-family: var(--font-mono);
     font-size: 12px;
     max-height: 400px;
@@ -1457,16 +1522,16 @@ header h1 {
 
 /* Info box for test page */
 .test-container .info-box {
-    background: #2a3f5f;
-    border-left: 4px solid #007bff;
+    background: var(--surface-strong);
+    border-left: 3px solid var(--accent);
     padding: 15px;
     margin: 20px 0;
     border-radius: 4px;
-    color: #e0e0e0;
+    color: var(--ink);
 }
 
 .test-container .info-box strong {
-    color: #4a9eff;
+    color: var(--accent);
 }
 
 /* Utils Page Specific Styles */
@@ -1489,7 +1554,7 @@ header h1 {
 
 .option-info.recommended {
     border-left: 3px solid var(--accent-success);
-    background: rgba(16, 185, 129, 0.05);
+    background: var(--tint-good);
 }
 
 .status-section {
@@ -1573,17 +1638,17 @@ header h1 {
 
 .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--accent-success), #059669);
+    background: var(--good);
     transition: width 0.3s ease;
 }
 
 .error-message {
-    background: rgba(239, 68, 68, 0.1);
+    background: var(--tint-danger);
     border: 1px solid var(--accent-danger);
     border-radius: var(--radius-md);
     padding: 0.75rem;
     margin-top: 0.75rem;
-    color: #ff6b6b;
+    color: var(--danger);
     font-size: 0.875rem;
     font-family: 'Courier New', monospace;
     max-height: 100px;
@@ -1591,7 +1656,7 @@ header h1 {
 }
 
 .output-file {
-    background: rgba(16, 185, 129, 0.1);
+    background: var(--tint-good);
     border: 1px solid var(--accent-success);
     border-radius: var(--radius-md);
     padding: 0.75rem;
@@ -1626,7 +1691,7 @@ header h1 {
 }
 
 .recordings-list .recording-item.selected {
-    background: rgba(59, 130, 246, 0.1);
+    background: var(--tint-accent);
     border-left: 4px solid var(--accent-primary);
     padding-left: calc(1rem - 4px);
 }
@@ -1766,9 +1831,9 @@ header h1 {
 }
 
 .vw-layout-btn {
-    background: #1a1a1a;
-    color: #888;
-    border: 1px solid #444;
+    background: var(--surface);
+    color: var(--muted);
+    border: 1px solid var(--line);
     border-radius: var(--radius-sm);
     padding: 3px 10px;
     font-size: 12px;
@@ -1778,19 +1843,19 @@ header h1 {
 }
 
 .vw-layout-btn:hover {
-    border-color: #888;
-    color: #ccc;
+    border-color: var(--muted);
+    color: var(--ink);
 }
 
 .vw-layout-btn.active {
     background: var(--accent-primary);
     border-color: var(--accent-primary);
-    color: #fff;
+    color: var(--ink);
 }
 
 .vw-cell {
     position: relative;
-    background: #0a0a0a;
+    background: var(--bg);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1820,9 +1885,9 @@ header h1 {
 
 .vw-cell-bar select {
     flex: 1;
-    background: #1a1a1a;
-    color: #ccc;
-    border: 1px solid #333;
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--line);
     border-radius: 3px;
     padding: 2px 4px;
     font-size: 11px;
@@ -1856,21 +1921,21 @@ header h1 {
     align-items: center;
     justify-content: center;
     font-size: 12px;
-    color: #666;
+    color: var(--text-muted);
     pointer-events: none;
     text-align: center;
     padding: 8px;
 }
 
-.vw-overlay.active { color: #aaa; }
-.vw-overlay.error  { color: #e55; }
+.vw-overlay.active { color: var(--muted); }
+.vw-overlay.error  { color: var(--danger); }
 
 .vw-status {
     position: absolute;
     top: 4px;
     right: 4px;
     background: rgba(0, 0, 0, 0.7);
-    color: #fa0;
+    color: var(--warn);
     font-size: 10px;
     padding: 2px 6px;
     border-radius: var(--radius-sm);
@@ -2011,4 +2076,261 @@ header h1 {
     font-size: 0.8125rem;
     margin-top: 2px;
     line-height: 1.4;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   UMT alignment
+   ───────────────────────────────────────────────────────────────────────────
+   Everything above keeps this app's own class names and layout. This section
+   brings the pieces whose *shape* differed onto umt-shared.css's metrics, and
+   patches the upstream and local bugs noted in umt-shared.README.md.
+
+   Load order matters: umt-shared.css first, then this file.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Upstream fix: .pill.success was pale-green text on a pale-green ground.
+      The newer .pill--good modifier is the correct one; this realigns the
+      legacy variant with it rather than leaving it unreadable. ── */
+.pill.success {
+    background: var(--chip-good);
+    color: var(--good);
+}
+
+/* Note: two focus rules above referenced --primary-color, a token that has
+   never been defined in this app, so the focus border never actually changed.
+   They now use --accent. Same story for --bg-secondary in the test page. */
+
+/* ── Controls on UMT metrics ──
+   umt-shared.css: buttons 38px tall, 8px radius, 14px/600; inputs 40px tall. */
+.btn {
+    min-height: 38px;
+    border-radius: var(--radius-lg);
+    padding: 0 14px;
+    font-size: 14px;
+    font-weight: 600;
+    border: 1px solid var(--line);
+}
+
+
+.btn-primary:hover {
+    background: var(--accent-dark);
+    border-color: var(--accent-dark);
+}
+
+/* Small/tiny variants keep their compact footprint — UMT's .row-action is the
+   same idea — but pick up the shared radius so they sit with everything else. */
+.btn-small,
+.btn-tiny {
+    min-height: 0;
+    border-radius: var(--radius-md);
+}
+
+.form-group input[type="text"],
+.form-group input[type="password"],
+.form-group input[type="number"],
+.form-group select,
+.form-group textarea {
+    min-height: 40px;
+    border-radius: var(--radius-lg);
+    background-color: var(--surface-strong);
+}
+
+.form-group label {
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+/* ── Panels ──
+   UMT's .panel is a flat surface with a hairline border and one shadow. The
+   16px-rounded, heavily shadowed card this app used has no UMT counterpart. */
+.card,
+.test-card,
+.job-card,
+.stream-item,
+.recording-item,
+.recording-item-full {
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--line);
+}
+
+.card {
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    padding: 18px;
+}
+
+/* ── Status chips take .pill's shape ── */
+.status-badge,
+.badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 26px;
+    padding: 0 10px;
+    border-radius: var(--radius-pill);
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+/* ── Stat tiles read as UMT .metric-card ── */
+.stat {
+    text-align: left;
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow);
+    padding: 16px;
+}
+
+.stat-label {
+    color: var(--muted);
+}
+
+.stat-value {
+    font-size: 1.65rem;
+    font-weight: 600;
+}
+
+/* ── Section headings ── */
+.card-header {
+    gap: 16px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   App chrome — REMOVE WHEN THIS BECOMES A UMT MODULE
+   ───────────────────────────────────────────────────────────────────────────
+   UMT sub-apps render inside an iframe under the shell's ribbon, and supply
+   only <div class="app-shell"><main class="content"><header class="topbar">.
+   They carry no masthead, no nav and no footer — the ribbon is the nav.
+
+   This app is standalone, so it keeps its own. Everything from here to the end
+   of this block is exactly what would be dropped to run under the shell; the
+   rules above it are already in the sub-app idiom. See the same marker in the
+   page markup.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+header {
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--line);
+    box-shadow: none;
+}
+
+/* Nav links borrow the ribbon's tab treatment: no outline, an underline rail
+   on the active one. */
+.nav-link {
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    font-weight: 500;
+    opacity: 0.88;
+}
+
+.nav-link:hover {
+    color: #93c5fd;
+    background: transparent;
+    opacity: 1;
+}
+
+.nav-link.active {
+    opacity: 1;
+}
+
+.footer {
+    border-top: 1px solid var(--line);
+}
+
+/* ── Checkboxes and radios ────────────────────────────────────────────────
+   umt-shared.css styles bare `select, input, textarea` (its line 114), so its
+   40px min-height, 12px padding, border, background and 8px radius land on
+   every input — checkboxes and radios included. A checkbox then occupies a
+   40px-tall inline box and the label text sits on that box's baseline, which
+   reads as the text having dropped to the next line.
+
+   UMT's own apps never hit this because they use custom widgets (.um-checkbox,
+   .toggle-field) rather than native controls. This app uses native ones, so
+   they have to be reset back out of that rule.
+
+   Deliberately not scoped to .form-group: the rule being undone is unscoped,
+   so anything narrower would leave checkboxes broken elsewhere. ── */
+input[type="checkbox"],
+input[type="radio"] {
+    min-height: 0;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    accent-color: var(--accent);
+    cursor: pointer;
+    vertical-align: middle;
+    flex: 0 0 auto;
+}
+
+/* Keeps the larger hit target on the recordings list's select-all boxes. */
+.recording-checkbox input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+}
+
+/* A label that wraps its own checkbox is a row, not a field caption: the text
+   is the setting's name, so it takes --ink rather than the muted treatment
+   that suits a caption sitting above an input.
+
+   :has() carries the label styling; the sizing reset above stands on its own,
+   so a browser without :has() still gets correctly aligned controls. */
+.form-group label:has(> input[type="checkbox"]),
+.form-group label:has(> input[type="radio"]) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink);
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+/* The 8px above is the gap now, so the old right margin would double it. */
+.form-group label > input[type="checkbox"],
+.form-group label > input[type="radio"],
+.form-group label > .setting-checkbox {
+    margin-right: 0;
+}
+
+/* Help text hangs under the control it explains, lined up with the label text
+   rather than the checkbox. */
+.form-group label:has(> input[type="checkbox"]) + small,
+.form-group label:has(> input[type="radio"]) + small {
+    margin-left: 24px;
+}
+
+/* File inputs inherit the shared 40px min-height with no vertical padding, so
+   the native "Choose file" button sits flush against the top edge instead of
+   centring. Flex centres it without overriding the platform widget. */
+input[type="file"] {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 0 10px;
+    cursor: pointer;
+}
+
+input[type="file"]::file-selector-button {
+    min-height: 26px;
+    margin-right: 10px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+input[type="file"]::file-selector-button:hover {
+    border-color: var(--muted);
 }

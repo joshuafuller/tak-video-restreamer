@@ -11,10 +11,18 @@ This is distributed in the hope that it will be useful, but without any warranty
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RTSP Restreamer Control Panel</title>
+    <!-- Shared UMT visual language (vendored; see umt-shared.README.md).
+         Must load before styles.css, which layers this app on top of it. -->
+    <link rel="stylesheet" href="/static/umt-shared.css">
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
     <div class="container">
+        <!-- ═══ APP CHROME — REMOVE WHEN THIS BECOMES A UMT MODULE ═══
+             UMT sub-apps render in an iframe under the shell's ribbon, which
+             supplies the branding and the nav. This masthead is what makes the
+             app standalone; under the shell it would be dropped and <main>
+             promoted. Matching marker in styles.css. -->
         <header>
             <div class="header-content">
                 <div class="header-title">
@@ -143,6 +151,11 @@ This is distributed in the hope that it will be useful, but without any warranty
                         <div class="connection-label">SRT Server</div>
                         <div class="connection-value" id="srt-server">srt://localhost:8890?streamid=</div>
                         <button class="btn-copy" onclick="copyToClipboard('srt-server')">Copy</button>
+                    </div>
+                    <div class="connection-item">
+                        <div class="connection-label">RTMP Server</div>
+                        <div class="connection-value" id="rtmp-server">rtmp://localhost:1935/</div>
+                        <button class="btn-copy" onclick="copyToClipboard('rtmp-server')">Copy</button>
                     </div>
                     <div class="connection-item">
                         <div class="connection-label">HLS Server (Browser)</div>
@@ -338,6 +351,7 @@ This is distributed in the hope that it will be useful, but without any warranty
             </div>
         </div>
     </div>
+        <!-- ═══ APP CHROME — REMOVE WHEN THIS BECOMES A UMT MODULE ═══ -->
 
     <footer class="footer">
         <div class="footer-content">

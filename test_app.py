@@ -628,6 +628,25 @@ class TestWebInterface:
         assert response.status_code == 200
         assert 'text/css' in response.content_type
     
+    def test_shared_umt_css_loads(self, client):
+        """The vendored UMT stylesheet every page links before styles.css"""
+        response = client.get('/static/umt-shared.css')
+        assert response.status_code == 200
+        assert 'text/css' in response.content_type
+
+    def test_pages_link_shared_css_before_app_css(self, client):
+        """Load order is load-bearing: styles.css overrides umt-shared.css.
+
+        If a page links them the other way round (or drops the shared sheet),
+        the UMT tokens win and this app's own component rules stop applying.
+        """
+        for route in ['/', '/recordings', '/settings', '/utils', '/test', '/videowall']:
+            body = client.get(route).data.decode('utf-8')
+            shared, app_css = body.find('umt-shared.css'), body.find('/static/styles.css')
+            assert shared != -1, f'{route} does not link umt-shared.css'
+            assert app_css != -1, f'{route} does not link styles.css'
+            assert shared < app_css, f'{route} links styles.css before umt-shared.css'
+
     def test_static_js_loads(self, client):
         """Test that JavaScript file loads successfully"""
         response = client.get('/static/client.js')
