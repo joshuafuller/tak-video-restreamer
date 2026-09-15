@@ -13,14 +13,20 @@ IMPLEMENTATION NOTE:
 -------------------
 This module uses manual KLV encoding/decoding rather than the 'klvdata' PyPI library
 because klvdata v0.0.3 is parser-only (cannot encode) and contains bugs that cause
-crashes on valid STANAG 4609 data. Our manual implementation is:
-  - More reliable: No OverflowError or parsing failures
-  - More complete: Supports both encoding AND decoding
-  - Well-tested: Battle-tested in production transcode workflows
-  - MISB ST 0601 compliant: Proper BER encoding, coordinate mapping, field ranges
+crashes on valid STANAG 4609 data.
 
-The klvdata library is kept as an optional dependency for future use if/when
-a stable version is released that supports encoding.
+Conformance notes (MISB ST 0601.19 / Motion Imagery Handbook):
+  - Local Set keys are BER-OID encoded (ST 0601.19 s7.1, MIH s7.3.2); lengths are
+    BER encoded (MIH s7.3.1). The two encodings differ above 127 and ST 0601
+    defines items well past that, so they are handled separately here.
+  - Item 1 (Checksum) is required on every packet. It is written on encode and
+    verified on decode (ST 0601.19 s6.8).
+  - Signed mapped items map -(2^(n-1)-1)..(2^(n-1)-1) onto their range - i.e. they
+    scale to (2^n - 2), not (2^n - 1) - and reserve -(2^(n-1)) (0x8000,
+    0x80000000, ...) as an "out of range"/error indicator, decoded here as None.
+  - Items whose conversion this module does not implement are still identified by
+    number and name and returned with their raw bytes and decoded=False, rather
+    than being given a guessed conversion.
 """
 
 import json
@@ -70,608 +76,571 @@ except ImportError:
     # Note: This is intentionally silent - klvdata is optional
     # and not currently used in production code
 
-# STANAG 4609 UAS Datalink Local Set (ULS) Tags
-STANAG_4609_TAGS = {
-    1: 'Checksum',
-    2: 'UNIX Time Stamp',
-    3: 'Mission ID',
-    4: 'Platform Tail Number',
-    5: 'Platform Heading Angle',
-    6: 'Platform Pitch Angle',
-    7: 'Platform Roll Angle',
-    8: 'Platform True Airspeed',
-    9: 'Platform Indicated Airspeed',
-    10: 'Platform Designation',
-    11: 'Image Source Sensor',
-    12: 'Image Coordinate System',
-    13: 'Sensor Latitude',
-    14: 'Sensor Longitude',
-    15: 'Sensor True Altitude',
-    16: 'Sensor Horizontal Field of View',
-    17: 'Sensor Vertical Field of View',
-    18: 'Sensor Relative Azimuth Angle',
-    19: 'Sensor Relative Elevation Angle',
-    20: 'Sensor Relative Roll Angle',
-    21: 'Slant Range',
-    22: 'Target Width',
-    23: 'Frame Center Latitude',
-    24: 'Frame Center Longitude',
-    25: 'Frame Center Elevation',
-    26: 'Offset Corner Latitude Point 1',
-    27: 'Offset Corner Longitude Point 1',
-    28: 'Offset Corner Latitude Point 2',
-    29: 'Offset Corner Longitude Point 2',
-    30: 'Offset Corner Latitude Point 3',
-    31: 'Offset Corner Longitude Point 3',
-    32: 'Offset Corner Latitude Point 4',
-    33: 'Offset Corner Longitude Point 4',
-    34: 'Icing Detected',
-    35: 'Wind Direction',
-    36: 'Wind Speed',
-    37: 'Static Pressure',
-    38: 'Density Altitude',
-    39: 'Outside Air Temperature',
-    40: 'Target Location Latitude',
-    41: 'Target Location Longitude',
-    42: 'Target Location Elevation',
-    43: 'Target Track Gate Width',
-    44: 'Target Track Gate Height',
-    45: 'Target Error Estimate - CE90',
-    46: 'Target Error Estimate - LE90',
-    47: 'Generic Flag Data 01',
-    48: 'Security Local Set',
-    49: 'Differential Pressure',
-    50: 'Platform Angle of Attack',
-    51: 'Platform Vertical Speed',
-    52: 'Platform Sideslip Angle',
-    53: 'Airfield Barometric Pressure',
-    54: 'Airfield Elevation',
-    55: 'Relative Humidity',
-    56: 'Platform Ground Speed',
-    57: 'Ground Range',
-    58: 'Platform Fuel Remaining',
-    59: 'Platform Call Sign',
-    60: 'Weapon Load',
-    61: 'Weapon Fired',
-    62: 'Laser PRF Code',
-    63: 'Sensor Field of View Name',
-    64: 'Platform Magnetic Heading',
-    65: 'UAS Datalink LS Version Number',
-    66: 'Target Location Covariance Matrix',
-    67: 'Alternate Platform Latitude',
-    68: 'Alternate Platform Longitude',
-    69: 'Alternate Platform Altitude',
-    70: 'Alternate Platform Name',
-    71: 'Alternate Platform Heading',
-    72: 'Event Start Time - UTC',
-    73: 'RVT Local Set',
-    74: 'VMTI Local Set',
-    75: 'Sensor Ellipsoid Height',
-    76: 'Alternate Platform Ellipsoid Height',
-    77: 'Operational Mode',
-    78: 'Frame Center Height Above Ellipsoid',
-    79: 'Sensor North Velocity',
-    80: 'Sensor East Velocity',
-    81: 'Image Horizon Pixel Pack',
-    82: 'Corner Latitude Point 1 (Full)',
-    83: 'Corner Longitude Point 1 (Full)',
-    84: 'Corner Latitude Point 2 (Full)',
-    85: 'Corner Longitude Point 2 (Full)',
-    86: 'Corner Latitude Point 3 (Full)',
-    87: 'Corner Longitude Point 3 (Full)',
-    88: 'Corner Latitude Point 4 (Full)',
-    89: 'Corner Longitude Point 4 (Full)',
+
+# 16-byte Universal Label for the UAS Datalink Local Set (MISB ST 0601)
+UAS_LOCAL_SET_KEY = b'\x06\x0e\x2b\x34\x02\x0b\x01\x01\x0e\x01\x03\x01\x01\x00\x00\x00'
+
+# Value written into item 65 (UAS Datalink LS Version Number)
+ST0601_VERSION = 19
+
+# Enumerations (ST 0601.19 sections 8.34, 8.63, 8.77)
+ICING_DETECTED = {
+    0: 'Detector off',
+    1: 'No icing detected',
+    2: 'Icing detected',
 }
+
+SENSOR_FOV_NAME = {
+    0: 'Ultranarrow',
+    1: 'Narrow',
+    2: 'Medium',
+    3: 'Wide',
+    4: 'Ultrawide',
+    5: 'Narrow Medium',
+    6: '2x Ultranarrow',
+    7: '4x Ultranarrow',
+}
+
+OPERATIONAL_MODE = {
+    0: 'Other',
+    1: 'Operational',
+    2: 'Training',
+    3: 'Exercise',
+    4: 'Maintenance',
+    5: 'Test',
+}
+
+
+def _spec(name, kind, **kwargs):
+    """Build an ST 0601 item specification."""
+    spec = {'name': name, 'kind': kind}
+    spec.update(kwargs)
+    return spec
+
+
+# Item kinds:
+#   uint / int      - plain integer, optional 'scale' multiplier
+#   uint_mapped     - map 0..(2^n - 1) onto [lo, hi]
+#   int_mapped      - map -(2^(n-1)-1)..(2^(n-1)-1) onto [-hi, hi];
+#                     -(2^(n-1)) is the "out of range"/error indicator
+#   string          - UTF-8 text
+#   enum            - integer with a lookup table
+#   flags           - bit field, reported as an integer
+#   timestamp       - uint64 microseconds since the UNIX epoch
+#   set             - nested local set (not expanded here)
+#   pack            - defined pack/array structure (not expanded here)
+#   opaque          - item is defined by ST 0601 but this module does not
+#                     implement its conversion; raw bytes are returned
+ST0601_ITEMS = {
+    1: _spec('Checksum', 'uint', length=2),
+    2: _spec('Precision Time Stamp', 'timestamp', length=8, units='microseconds'),
+    3: _spec('Mission ID', 'string'),
+    4: _spec('Platform Tail Number', 'string'),
+    5: _spec('Platform Heading Angle', 'uint_mapped', length=2, lo=0.0, hi=360.0, units='degrees'),
+    6: _spec('Platform Pitch Angle', 'int_mapped', length=2, hi=20.0, units='degrees', full_range_tag=90),
+    7: _spec('Platform Roll Angle', 'int_mapped', length=2, hi=50.0, units='degrees', full_range_tag=91),
+    8: _spec('Platform True Airspeed', 'uint', length=1, units='m/s'),
+    9: _spec('Platform Indicated Airspeed', 'uint', length=1, units='m/s'),
+    10: _spec('Platform Designation', 'string'),
+    11: _spec('Image Source Sensor', 'string'),
+    12: _spec('Image Coordinate System', 'string'),
+    13: _spec('Sensor Latitude', 'int_mapped', length=4, hi=90.0, units='degrees'),
+    14: _spec('Sensor Longitude', 'int_mapped', length=4, hi=180.0, units='degrees'),
+    15: _spec('Sensor True Altitude', 'uint_mapped', length=2, lo=-900.0, hi=19000.0, units='meters'),
+    16: _spec('Sensor Horizontal Field of View', 'uint_mapped', length=2, lo=0.0, hi=180.0, units='degrees'),
+    17: _spec('Sensor Vertical Field of View', 'uint_mapped', length=2, lo=0.0, hi=180.0, units='degrees'),
+    18: _spec('Sensor Relative Azimuth Angle', 'uint_mapped', length=4, lo=0.0, hi=360.0, units='degrees'),
+    19: _spec('Sensor Relative Elevation Angle', 'int_mapped', length=4, hi=180.0, units='degrees'),
+    20: _spec('Sensor Relative Roll Angle', 'uint_mapped', length=4, lo=0.0, hi=360.0, units='degrees'),
+    21: _spec('Slant Range', 'uint_mapped', length=4, lo=0.0, hi=5000000.0, units='meters'),
+    22: _spec('Target Width', 'uint_mapped', length=2, lo=0.0, hi=10000.0, units='meters'),
+    23: _spec('Frame Center Latitude', 'int_mapped', length=4, hi=90.0, units='degrees'),
+    24: _spec('Frame Center Longitude', 'int_mapped', length=4, hi=180.0, units='degrees'),
+    25: _spec('Frame Center Elevation', 'uint_mapped', length=2, lo=-900.0, hi=19000.0, units='meters'),
+    # Offset corners are 2-byte offsets of +/-0.075 degrees applied to the frame
+    # centre (items 23/24) - not absolute coordinates. ST 0601.19 s8.26-8.33.
+    26: _spec('Offset Corner Latitude Point 1', 'int_mapped', length=2, hi=0.075, units='degrees', offset_from=23),
+    27: _spec('Offset Corner Longitude Point 1', 'int_mapped', length=2, hi=0.075, units='degrees', offset_from=24),
+    28: _spec('Offset Corner Latitude Point 2', 'int_mapped', length=2, hi=0.075, units='degrees', offset_from=23),
+    29: _spec('Offset Corner Longitude Point 2', 'int_mapped', length=2, hi=0.075, units='degrees', offset_from=24),
+    30: _spec('Offset Corner Latitude Point 3', 'int_mapped', length=2, hi=0.075, units='degrees', offset_from=23),
+    31: _spec('Offset Corner Longitude Point 3', 'int_mapped', length=2, hi=0.075, units='degrees', offset_from=24),
+    32: _spec('Offset Corner Latitude Point 4', 'int_mapped', length=2, hi=0.075, units='degrees', offset_from=23),
+    33: _spec('Offset Corner Longitude Point 4', 'int_mapped', length=2, hi=0.075, units='degrees', offset_from=24),
+    34: _spec('Icing Detected', 'enum', length=1, values=ICING_DETECTED),
+    35: _spec('Wind Direction', 'uint_mapped', length=2, lo=0.0, hi=360.0, units='degrees'),
+    36: _spec('Wind Speed', 'uint_mapped', length=1, lo=0.0, hi=100.0, units='m/s'),
+    37: _spec('Static Pressure', 'uint_mapped', length=2, lo=0.0, hi=5000.0, units='millibar'),
+    38: _spec('Density Altitude', 'uint_mapped', length=2, lo=-900.0, hi=19000.0, units='meters'),
+    39: _spec('Outside Air Temperature', 'int', length=1, units='celsius'),
+    40: _spec('Target Location Latitude', 'int_mapped', length=4, hi=90.0, units='degrees'),
+    41: _spec('Target Location Longitude', 'int_mapped', length=4, hi=180.0, units='degrees'),
+    42: _spec('Target Location Elevation', 'uint_mapped', length=2, lo=-900.0, hi=19000.0, units='meters'),
+    43: _spec('Target Track Gate Width', 'uint', length=1, scale=2, units='pixels'),
+    44: _spec('Target Track Gate Height', 'uint', length=1, scale=2, units='pixels'),
+    45: _spec('Target Error Estimate - CE90', 'uint_mapped', length=2, lo=0.0, hi=4095.0, units='meters'),
+    46: _spec('Target Error Estimate - LE90', 'uint_mapped', length=2, lo=0.0, hi=4095.0, units='meters'),
+    47: _spec('Generic Flag Data 01', 'flags', length=1),
+    48: _spec('Security Local Set', 'set', standard='MISB ST 0102'),
+    49: _spec('Differential Pressure', 'uint_mapped', length=2, lo=0.0, hi=5000.0, units='millibar'),
+    50: _spec('Platform Angle of Attack', 'int_mapped', length=2, hi=20.0, units='degrees', full_range_tag=92),
+    51: _spec('Platform Vertical Speed', 'int_mapped', length=2, hi=180.0, units='m/s'),
+    52: _spec('Platform Sideslip Angle', 'int_mapped', length=2, hi=20.0, units='degrees', full_range_tag=93),
+    53: _spec('Airfield Barometric Pressure', 'uint_mapped', length=2, lo=0.0, hi=5000.0, units='millibar'),
+    54: _spec('Airfield Elevation', 'uint_mapped', length=2, lo=-900.0, hi=19000.0, units='meters'),
+    55: _spec('Relative Humidity', 'uint_mapped', length=1, lo=0.0, hi=100.0, units='percent'),
+    56: _spec('Platform Ground Speed', 'uint', length=1, units='m/s'),
+    57: _spec('Ground Range', 'uint_mapped', length=4, lo=0.0, hi=5000000.0, units='meters'),
+    58: _spec('Platform Fuel Remaining', 'uint_mapped', length=2, lo=0.0, hi=10000.0, units='kilograms'),
+    59: _spec('Platform Call Sign', 'string'),
+    60: _spec('Weapon Load', 'uint', length=2),
+    61: _spec('Weapon Fired', 'uint', length=1),
+    62: _spec('Laser PRF Code', 'uint', length=2),
+    63: _spec('Sensor Field of View Name', 'enum', length=1, values=SENSOR_FOV_NAME),
+    64: _spec('Platform Magnetic Heading', 'uint_mapped', length=2, lo=0.0, hi=360.0, units='degrees'),
+    65: _spec('UAS Datalink LS Version Number', 'uint', length=1),
+    66: _spec('Target Location Covariance Matrix', 'opaque', deprecated=True),
+    67: _spec('Alternate Platform Latitude', 'int_mapped', length=4, hi=90.0, units='degrees'),
+    68: _spec('Alternate Platform Longitude', 'int_mapped', length=4, hi=180.0, units='degrees'),
+    69: _spec('Alternate Platform Altitude', 'uint_mapped', length=2, lo=-900.0, hi=19000.0, units='meters'),
+    70: _spec('Alternate Platform Name', 'string'),
+    71: _spec('Alternate Platform Heading', 'uint_mapped', length=2, lo=0.0, hi=360.0, units='degrees'),
+    72: _spec('Event Start Time - UTC', 'timestamp', length=8, units='microseconds'),
+    73: _spec('RVT Local Set', 'set', standard='MISB ST 0806'),
+    74: _spec('VMTI Local Set', 'set', standard='MISB ST 0903'),
+    75: _spec('Sensor Ellipsoid Height', 'uint_mapped', length=2, lo=-900.0, hi=19000.0, units='meters'),
+    76: _spec('Alternate Platform Ellipsoid Height', 'uint_mapped', length=2, lo=-900.0, hi=19000.0, units='meters'),
+    77: _spec('Operational Mode', 'enum', length=1, values=OPERATIONAL_MODE),
+    78: _spec('Frame Center Height Above Ellipsoid', 'uint_mapped', length=2, lo=-900.0, hi=19000.0, units='meters'),
+    79: _spec('Sensor North Velocity', 'int_mapped', length=2, hi=327.0, units='m/s'),
+    80: _spec('Sensor East Velocity', 'int_mapped', length=2, hi=327.0, units='m/s'),
+    81: _spec('Image Horizon Pixel Pack', 'pack'),
+    82: _spec('Corner Latitude Point 1 (Full)', 'int_mapped', length=4, hi=90.0, units='degrees'),
+    83: _spec('Corner Longitude Point 1 (Full)', 'int_mapped', length=4, hi=180.0, units='degrees'),
+    84: _spec('Corner Latitude Point 2 (Full)', 'int_mapped', length=4, hi=90.0, units='degrees'),
+    85: _spec('Corner Longitude Point 2 (Full)', 'int_mapped', length=4, hi=180.0, units='degrees'),
+    86: _spec('Corner Latitude Point 3 (Full)', 'int_mapped', length=4, hi=90.0, units='degrees'),
+    87: _spec('Corner Longitude Point 3 (Full)', 'int_mapped', length=4, hi=180.0, units='degrees'),
+    88: _spec('Corner Latitude Point 4 (Full)', 'int_mapped', length=4, hi=90.0, units='degrees'),
+    89: _spec('Corner Longitude Point 4 (Full)', 'int_mapped', length=4, hi=180.0, units='degrees'),
+    90: _spec('Platform Pitch Angle (Full)', 'int_mapped', length=4, hi=90.0, units='degrees'),
+    91: _spec('Platform Roll Angle (Full)', 'int_mapped', length=4, hi=90.0, units='degrees'),
+    92: _spec('Platform Angle of Attack (Full)', 'int_mapped', length=4, hi=90.0, units='degrees'),
+    93: _spec('Platform Sideslip Angle (Full)', 'int_mapped', length=4, hi=180.0, units='degrees'),
+    94: _spec('MIIS Core Identifier', 'opaque', standard='MISB ST 1204'),
+    95: _spec('SAR Motion Imagery Local Set', 'set', standard='MISB ST 1206'),
+    96: _spec('Target Width Extended', 'opaque', units='meters'),
+    97: _spec('Range Image Local Set', 'set', standard='MISB ST 1002'),
+    98: _spec('Geo-Registration Local Set', 'set', standard='MISB ST 1601'),
+    99: _spec('Composite Imaging Local Set', 'set', standard='MISB ST 1602'),
+    100: _spec('Segment Local Set', 'set', standard='MISB ST 1607'),
+    101: _spec('Amend Local Set', 'set', standard='MISB ST 1607'),
+    102: _spec('SDCC-FLP', 'pack', standard='MISB ST 1010', repeatable=True),
+    103: _spec('Density Altitude Extended', 'opaque', units='meters'),
+    104: _spec('Sensor Ellipsoid Height Extended', 'opaque', units='meters'),
+    105: _spec('Alternate Platform Ellipsoid Height Extended', 'opaque', units='meters'),
+    106: _spec('Stream Designator', 'string'),
+    107: _spec('Operational Base', 'string'),
+    108: _spec('Broadcast Source', 'string'),
+    109: _spec('Range to Recovery Location', 'opaque', units='kilometers'),
+    110: _spec('Time Airborne', 'uint', units='seconds'),
+    111: _spec('Propulsion Unit Speed', 'uint', units='rpm'),
+    112: _spec('Platform Course Angle', 'opaque', units='degrees'),
+    113: _spec('Altitude AGL', 'opaque', units='meters'),
+    114: _spec('Radar Altimeter', 'opaque', units='meters'),
+    115: _spec('Control Command', 'pack'),
+    116: _spec('Control Command Verification List', 'pack'),
+    117: _spec('Sensor Azimuth Rate', 'opaque', units='degrees/second'),
+    118: _spec('Sensor Elevation Rate', 'opaque', units='degrees/second'),
+    119: _spec('Sensor Roll Rate', 'opaque', units='degrees/second'),
+    120: _spec('On-board MI Storage Percent Full', 'opaque', units='percent'),
+    121: _spec('Active Wavelength List', 'pack'),
+    122: _spec('Country Codes', 'pack'),
+    123: _spec('Number of NAVSATs in View', 'uint'),
+    124: _spec('Positioning Method Source', 'flags'),
+    125: _spec('Platform Status', 'uint'),
+    126: _spec('Sensor Control Mode', 'uint'),
+    127: _spec('Sensor Frame Rate Pack', 'pack'),
+    128: _spec('Wavelengths List', 'pack', repeatable=True),
+    129: _spec('Target ID', 'string'),
+    130: _spec('Airbase Locations', 'pack'),
+    131: _spec('Takeoff Time', 'uint', units='microseconds'),
+    132: _spec('Transmission Frequency', 'opaque', units='megahertz'),
+    133: _spec('On-board MI Storage Capacity', 'uint', units='gigabytes'),
+    134: _spec('Zoom Percentage', 'opaque', units='percent'),
+    135: _spec('Communications Method', 'string'),
+    136: _spec('Leap Seconds', 'int', units='seconds'),
+    137: _spec('Correction Offset', 'int', units='microseconds'),
+    138: _spec('Payload List', 'pack'),
+    139: _spec('Active Payloads', 'pack'),
+    140: _spec('Weapons Stores', 'pack', repeatable=True),
+    141: _spec('Waypoint List', 'pack', repeatable=True),
+    142: _spec('View Domain', 'pack'),
+}
+
+# Backwards-compatible name lookup (this used to be the whole tag table)
+STANAG_4609_TAGS = {tag: spec['name'] for tag, spec in ST0601_ITEMS.items()}
+
+# Items ST 0601.19 Table 1 permits more than once in a single Local Set. Packet
+# order is significant for these, so decoded packets keep an ordered item list
+# alongside the name-keyed dictionary.
+REPEATABLE_TAGS = {tag for tag, spec in ST0601_ITEMS.items() if spec.get('repeatable')}
+
+# Items that must not be generated in new metadata
+DEPRECATED_TAGS = {tag for tag, spec in ST0601_ITEMS.items() if spec.get('deprecated')}
+
+
+# --------------------------------------------------------------------------
+# BER / BER-OID encoding helpers (Motion Imagery Handbook s7.3.1, s7.3.2)
+# --------------------------------------------------------------------------
+
+def encode_ber_length(length: int) -> bytes:
+    """Encode a BER length (short form under 128, else long form)."""
+    if length < 0:
+        raise ValueError('length must not be negative')
+    if length < 128:
+        return bytes([length])
+    payload = length.to_bytes((length.bit_length() + 7) // 8, 'big')
+    return bytes([0x80 | len(payload)]) + payload
+
+
+def decode_ber_length(data: bytes, offset: int = 0) -> Tuple[Optional[int], int]:
+    """Decode a BER length. Returns (length, new_offset); length is None if truncated."""
+    if offset >= len(data):
+        return None, offset
+    first = data[offset]
+    offset += 1
+    if first & 0x80 == 0:
+        return first, offset
+    count = first & 0x7F
+    if count == 0 or offset + count > len(data):
+        return None, offset
+    value = int.from_bytes(data[offset:offset + count], 'big')
+    return value, offset + count
+
+
+def encode_ber_oid(value: int) -> bytes:
+    """Encode a BER-OID key (7 bits per byte, MSB set on all but the last)."""
+    if value < 0:
+        raise ValueError('BER-OID values must not be negative')
+    out = bytearray([value & 0x7F])
+    value >>= 7
+    while value:
+        out.insert(0, 0x80 | (value & 0x7F))
+        value >>= 7
+    return bytes(out)
+
+
+def decode_ber_oid(data: bytes, offset: int = 0) -> Tuple[Optional[int], int]:
+    """Decode a BER-OID key. Returns (value, new_offset); value is None if truncated."""
+    value = 0
+    start = offset
+    while offset < len(data):
+        byte = data[offset]
+        offset += 1
+        value = (value << 7) | (byte & 0x7F)
+        if not byte & 0x80:
+            return value, offset
+        if offset - start > 8:  # runaway continuation bits
+            return None, offset
+    return None, offset
+
+
+def compute_checksum(packet: bytes) -> int:
+    """
+    16-bit checksum over a UAS Local Set packet (ST 0601.19 s6.8).
+
+    `packet` runs from the first byte of the 16-byte Universal Label through the
+    1-byte length of the checksum item itself (i.e. everything except the two
+    checksum value bytes).
+    """
+    bcc = 0
+    for i, byte in enumerate(packet):
+        bcc = (bcc + (byte << (8 * ((i + 1) % 2)))) & 0xFFFF
+    return bcc
+
+
+# --------------------------------------------------------------------------
+# Value conversion helpers
+# --------------------------------------------------------------------------
+
+def _be_uint(data: bytes) -> int:
+    return int.from_bytes(data, 'big', signed=False)
+
+
+def _be_int(data: bytes) -> int:
+    return int.from_bytes(data, 'big', signed=True)
+
+
+def decode_uint_mapped(data: bytes, lo: float, hi: float) -> float:
+    """Map 0..(2^n - 1) onto [lo, hi]."""
+    span = (1 << (8 * len(data))) - 1
+    return lo + _be_uint(data) * (hi - lo) / float(span)
+
+
+def encode_uint_mapped(value: float, lo: float, hi: float, length: int) -> bytes:
+    """Inverse of decode_uint_mapped, clamped to [lo, hi]."""
+    span = (1 << (8 * length)) - 1
+    clamped = max(lo, min(hi, float(value)))
+    raw = int(round((clamped - lo) * span / (hi - lo)))
+    return max(0, min(span, raw)).to_bytes(length, 'big')
+
+
+def decode_int_mapped(data: bytes, hi: float) -> Optional[float]:
+    """
+    Map -(2^(n-1) - 1)..(2^(n-1) - 1) onto [-hi, hi].
+
+    The scale factor is (2^n - 2), not (2^n - 1), and -(2^(n-1)) is reserved as
+    the "out of range"/error indicator - returned as None.
+    """
+    bits = 8 * len(data)
+    raw = _be_int(data)
+    if raw == -(1 << (bits - 1)):
+        return None
+    return raw * (2.0 * hi) / float((1 << bits) - 2)
+
+
+def encode_int_mapped(value: Optional[float], hi: float, length: int) -> bytes:
+    """Inverse of decode_int_mapped. None encodes the out-of-range indicator."""
+    bits = 8 * length
+    if value is None:
+        return (-(1 << (bits - 1))).to_bytes(length, 'big', signed=True)
+    limit = (1 << (bits - 1)) - 1
+    clamped = max(-hi, min(hi, float(value)))
+    raw = int(round(clamped * ((1 << bits) - 2) / (2.0 * hi)))
+    return max(-limit, min(limit, raw)).to_bytes(length, 'big', signed=True)
+
+
+def _decode_string(data: bytes) -> str:
+    return data.decode('utf-8', errors='replace').rstrip('\x00')
+
 
 class UnifiedKLVParser:
     """
     Unified KLV Parser supporting both CLI and library interfaces
-    Implements STANAG 4609 UAS Datalink Local Set parsing
+    Implements MISB ST 0601 UAS Datalink Local Set parsing
     """
-    
+
     def __init__(self, stream_name: str = None, api_url: str = "http://localhost:3000"):
         self.stream_name = stream_name
         self.api_url = api_url
         self.raw_format = 'hex'  # Default format for raw values: 'hex' or 'decimal'
         self.logger = self._setup_logging()
-        
+
     def _setup_logging(self) -> logging.Logger:
         """Setup logging configuration"""
         return logging.getLogger('UnifiedKLVParser')
-        
+
     def parse_ber_length(self, data: bytes, offset: int) -> Tuple[int, int]:
-        """Parse BER (Basic Encoding Rules) length field"""
-        if offset >= len(data):
-            return 0, offset
-            
-        first_byte = data[offset]
-        offset += 1
-        
-        if first_byte & 0x80 == 0:
-            # Short form
-            return first_byte, offset
-        else:
-            # Long form
-            length_bytes = first_byte & 0x7F
-            if length_bytes == 0 or offset + length_bytes > len(data):
-                return 0, offset
-                
-            length = 0
-            for i in range(length_bytes):
-                length = (length << 8) | data[offset]
-                offset += 1
-            return length, offset
-    
+        """Parse a BER length field. Returns (length, new_offset)."""
+        length, new_offset = decode_ber_length(data, offset)
+        return (0 if length is None else length), new_offset
+
+    def parse_ber_oid(self, data: bytes, offset: int) -> Tuple[Optional[int], int]:
+        """Parse a BER-OID item key. Returns (tag, new_offset)."""
+        return decode_ber_oid(data, offset)
+
     def parse_klv_packet(self, data: bytes) -> Dict[str, Any]:
-        """Parse a complete KLV packet"""
+        """
+        Parse a complete UAS Datalink Local Set packet.
+
+        Returns a dict with:
+          items          - every item in packet order, including repeats
+          tags           - name-keyed view of items (repeats get a ' #n' suffix)
+          checksum_valid - True/False, or None when the packet carries no checksum
+        """
         result = {
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'stream_name': self.stream_name,
+            'items': [],
             'tags': {},
-            'raw_size': len(data)
+            'raw_size': len(data),
+            'checksum_valid': None,
         }
-        
-        if len(data) < 16:  # Minimum KLV packet size
+
+        if len(data) < 17:  # 16-byte key + at least one length byte
             result['error'] = 'Packet too small'
             return result
-            
-        offset = 0
-        
+
+        if data[:16] != UAS_LOCAL_SET_KEY:
+            result['error'] = 'Not a UAS Datalink Local Set packet'
+            return result
+
         try:
-            # Parse UAS Datalink Local Set (16-byte key)
-            if data[offset:offset+16] == b'\x06\x0e\x2b\x34\x02\x0b\x01\x01\x0e\x01\x03\x01\x01\x00\x00\x00':
-                offset += 16
-                
-                # Parse length
-                length, offset = self.parse_ber_length(data, offset)
-                
-                if offset + length > len(data):
-                    result['error'] = 'Invalid length field'
-                    return result
-                
-                # Parse tags within the ULS
-                end_offset = offset + length
-                while offset < end_offset:
-                    tag, offset = self.parse_ber_length(data, offset)
-                    if offset >= end_offset:
-                        break
-                        
-                    tag_length, offset = self.parse_ber_length(data, offset)
-                    if offset + tag_length > end_offset:
-                        break
-                    
-                    tag_data = data[offset:offset + tag_length]
-                    offset += tag_length
-                    
-                    # Parse tag value based on type
-                    tag_name = STANAG_4609_TAGS.get(tag, f'Unknown Tag {tag}')
-                    parsed_value, raw_value = self._parse_tag_value(tag, tag_data)
-                    
-                    result['tags'][tag_name] = {
-                        'tag_id': tag,
-                        'value': parsed_value,
-                        'raw_value': raw_value,
-                        'raw_length': tag_length
-                    }
-                    
+            length, offset = decode_ber_length(data, 16)
+            if length is None:
+                result['error'] = 'Invalid length field'
+                return result
+
+            end_offset = offset + length
+            if end_offset > len(data):
+                result['error'] = 'Invalid length field'
+                return result
+
+            result['raw_size'] = end_offset
+
+            while offset < end_offset:
+                # Item keys are BER-OID encoded, item lengths are BER encoded
+                tag, offset = decode_ber_oid(data, offset)
+                if tag is None or offset >= end_offset:
+                    break
+
+                item_length, offset = decode_ber_length(data, offset)
+                if item_length is None or offset + item_length > end_offset:
+                    result['error'] = f'Truncated value for item {tag}'
+                    break
+
+                item_data = data[offset:offset + item_length]
+
+                if tag == 1 and item_length == 2:
+                    # Checksum covers everything up to and including its own length byte
+                    expected = compute_checksum(data[:offset])
+                    result['checksum_valid'] = (expected == _be_uint(item_data))
+                    result['checksum_expected'] = expected
+
+                offset += item_length
+                result['items'].append(self._decode_item(tag, item_data))
+
+            self._resolve_offset_corners(result['items'])
+            result['tags'] = self._index_items(result['items'])
+
         except Exception as e:
             result['error'] = f'Parse error: {str(e)}'
-            
+
         return result
-    
-    def _parse_tag_value(self, tag: int, data: bytes) -> tuple[Any, Any]:
+
+    def _format_raw(self, data: bytes):
+        """Raw value in the configured representation"""
+        if self.raw_format == 'decimal':
+            return int.from_bytes(data, byteorder='big', signed=False)
+        return data.hex()
+
+    def _decode_item(self, tag: int, data: bytes) -> Dict[str, Any]:
+        """Decode one Local Set item into a descriptive dict."""
+        spec = ST0601_ITEMS.get(tag)
+        raw_value = self._format_raw(data)
+        item = {
+            'tag_id': tag,
+            'name': spec['name'] if spec else f'Unknown Tag {tag}',
+            'value': raw_value,
+            'raw_value': raw_value,
+            'raw_length': len(data),
+            'decoded': False,
+        }
+        if spec is None:
+            return item
+        if spec.get('units'):
+            item['units'] = spec['units']
+        if spec.get('deprecated'):
+            item['deprecated'] = True
+
+        value, decoded = self._decode_value(spec, data)
+        item['decoded'] = decoded
+        if decoded and value is None:
+            # Signed mapped items use -(2^(n-1)) to say "out of range"
+            item['value'] = None
+            item['out_of_range'] = True
+        elif value is not None:
+            item['value'] = value
+        if spec.get('offset_from'):
+            item['offset_from_tag'] = spec['offset_from']
+        return item
+
+    def _decode_value(self, spec: Dict[str, Any], data: bytes) -> Tuple[Any, bool]:
         """
-        Parse individual tag values based on MISB ST 0601.19 specifications
+        Convert an item's bytes to a value.
+
+        Returns (value, decoded). decoded is False when this module has no
+        conversion for the item or the length does not match the specification.
+        """
+        kind = spec['kind']
+        if not data:
+            return None, False
+
+        expected_length = spec.get('length')
+        if expected_length is not None and len(data) != expected_length:
+            return None, False
+
+        try:
+            if kind == 'string':
+                return _decode_string(data), True
+            if kind == 'timestamp':
+                return _be_uint(data) / 1000000.0, True
+            if kind == 'uint':
+                return _be_uint(data) * spec.get('scale', 1), True
+            if kind == 'int':
+                return _be_int(data) * spec.get('scale', 1), True
+            if kind == 'flags':
+                return _be_uint(data), True
+            if kind == 'enum':
+                code = _be_uint(data)
+                return {'code': code, 'name': spec['values'].get(code, 'Reserved')}, True
+            if kind == 'uint_mapped':
+                return decode_uint_mapped(data, spec['lo'], spec['hi']), True
+            if kind == 'int_mapped':
+                return decode_int_mapped(data, spec['hi']), True
+            if kind in ('set', 'pack'):
+                standard = spec.get('standard')
+                label = f"{spec['name']} ({len(data)} bytes"
+                label += f", {standard})" if standard else ')'
+                return label, False
+        except Exception:
+            return None, False
+
+        return None, False
+
+    def _resolve_offset_corners(self, items: List[Dict[str, Any]]):
+        """
+        Add absolute coordinates for the offset corner items (26-33).
+
+        Those items carry a +/-0.075 degree offset from the frame centre, so the
+        absolute corner is only meaningful alongside items 23/24.
+        """
+        centres = {}
+        for item in items:
+            if item['tag_id'] in (23, 24) and item.get('decoded') and isinstance(item.get('value'), float):
+                centres[item['tag_id']] = item['value']
+        for item in items:
+            base = item.get('offset_from_tag')
+            if base in centres and isinstance(item.get('value'), float):
+                item['absolute_value'] = centres[base] + item['value']
+
+    @staticmethod
+    def _index_items(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Name-keyed view of the item list.
+
+        Some ST 0601 items may legitimately appear more than once in a packet
+        (ST 0601.19 Table 1); repeats are suffixed rather than overwritten so no
+        data is lost through the dictionary view.
+        """
+        indexed: Dict[str, Any] = {}
+        counts: Dict[str, int] = {}
+        for position, item in enumerate(items):
+            name = item['name']
+            counts[name] = counts.get(name, 0) + 1
+            key = name if counts[name] == 1 else f"{name} #{counts[name]}"
+            entry = dict(item)
+            entry['position'] = position
+            indexed[key] = entry
+        return indexed
+
+    def _parse_tag_value(self, tag: int, data: bytes) -> Tuple[Any, Any]:
+        """
+        Parse an individual item value (MISB ST 0601.19).
         Returns: (decoded_value, raw_value_in_specified_format)
-        
-        All conversions follow MISB ST 0601.19 formulas and ranges
         """
         if len(data) == 0:
             return None, None
-        
-        # Format raw value based on preference
-        if self.raw_format == 'decimal':
-            # Convert bytes to combined unsigned integer (big-endian)
-            raw_value = int.from_bytes(data, byteorder='big', signed=False)
-        else:
-            raw_value = data.hex()  # Default hex format
-            
-        try:
-            # Tag 1: Checksum (2 bytes, uint16)
-            if tag == 1:
-                if len(data) == 2:
-                    checksum = struct.unpack('>H', data)[0]
-                    return checksum, raw_value
-                return raw_value, raw_value
-            
-            # Tag 2: UNIX Time Stamp (8 bytes, uint64 microseconds)
-            elif tag == 2:
-                if len(data) == 8:
-                    timestamp = struct.unpack('>Q', data)[0]
-                    return timestamp / 1000000.0, raw_value  # Convert to seconds
-                return raw_value, raw_value
-                    
-            # String values (variable length, UTF-8)
-            elif tag in [3, 4, 10, 11, 59, 63, 70, 77]:  
-                # 3=Mission ID, 4=Platform Tail Number, 10=Platform Designation,
-                # 11=Image Source Sensor, 59=Platform Call Sign, 63=Sensor FOV Name,
-                # 70=Alternate Platform Name, 77=Operational Mode
-                decoded = data.decode('utf-8', errors='ignore').strip('\x00')
-                return decoded, raw_value
-                
-            # Tag 5: Platform Heading Angle (2 bytes, IMAPB, 0-360°)
-            elif tag == 5:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    # Map 0-65535 to 0-360 degrees
-                    return (raw * 360.0 / 65535.0), raw_value
-                return raw_value, raw_value
-                    
-            # Tags 6,7: Platform Pitch/Roll Angle (2 bytes, IMAPB, -20 to +20°)
-            elif tag in [6, 7]:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    # Map 0-65535 to -20 to +20 degrees
-                    return (raw - 32767.5) * (40.0 / 65535.0), raw_value
-                return raw_value, raw_value
-                    
-            # Tag 8: Platform True Airspeed (1 byte, uint8, 0-255 m/s)
-            elif tag == 8:
-                if len(data) == 1:
-                    return struct.unpack('B', data)[0], raw_value
-                return raw_value, raw_value
-                    
-            # Tag 9: Platform Indicated Airspeed (1 byte, uint8, 0-255 m/s)
-            elif tag == 9:
-                if len(data) == 1:
-                    return struct.unpack('B', data)[0], raw_value
-                return raw_value, raw_value
-            
-            # Tag 12: Image Coordinate System (variable length string)
-            elif tag == 12:
-                decoded = data.decode('utf-8', errors='ignore').strip('\x00')
-                return decoded, raw_value
-                    
-            # Coordinates - Latitude/Longitude (4 bytes, int32, IMAPB)
-            # Tags 13,14: Sensor Lat/Lon, 23,24: Frame Center Lat/Lon
-            # Tags 26-33: Offset Corner Lat/Lon (4 points)
-            # Tags 40,41: Target Location Lat/Lon, 67,68: Alternate Platform Lat/Lon
-            # Tags 82-89: Full Corner Lat/Lon (4 points, 8 bytes)
-            elif tag in [13, 14, 23, 24, 26, 27, 28, 29, 30, 31, 32, 33, 40, 41, 67, 68]:
-                if len(data) == 4:
-                    raw = struct.unpack('>i', data)[0]
-                    # Map -(2^31-1) to +(2^31-1) to ±90° (lat) or ±180° (lon)
-                    # Odd tags are latitude (-90 to +90), even tags are longitude (-180 to +180)
-                    if tag % 2 == 1:  # Latitude
-                        return (raw / (2**31 - 1)) * 90.0, raw_value
-                    else:  # Longitude
-                        return (raw / (2**31 - 1)) * 180.0, raw_value
-                return raw_value, raw_value
-            
-            # Full precision corners (8 bytes double)
-            elif tag in [82, 83, 84, 85, 86, 87, 88, 89]:
-                if len(data) == 8:
-                    value = struct.unpack('>d', data)[0]
-                    return value, raw_value
-                return raw_value, raw_value
-                    
-            # Tag 15: Sensor True Altitude (2 bytes, uint16, -900 to +19000 m)
-            elif tag == 15:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    # Map 0-65535 to -900 to +19000 meters
-                    return (raw / 65535.0) * 19900.0 - 900.0, raw_value
-                return raw_value, raw_value
-            
-            # Tag 16: Sensor Horizontal FOV (2 bytes, uint16, 0-180°)
-            elif tag == 16:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 180.0 / 65535.0), raw_value
-                return raw_value, raw_value
-                    
-            # Tag 17: Sensor Vertical FOV (2 bytes, uint16, 0-180°)
-            elif tag == 17:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 180.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tags 18,19,20: Sensor Relative Azimuth/Elevation/Roll (2 bytes, IMAPB, 0-360°)
-            elif tag in [18, 19, 20]:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 360.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 21: Slant Range (4 bytes, uint32, 0-5000000 m)
-            elif tag == 21:
-                if len(data) == 4:
-                    raw = struct.unpack('>I', data)[0]
-                    return (raw * 5000000.0 / (2**32 - 1)), raw_value
-                return raw_value, raw_value
-            
-            # Tag 22: Target Width (2 bytes, uint16, 0-10000 m)
-            elif tag == 22:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 10000.0 / 65535.0), raw_value
-                return raw_value, raw_value
-                    
-            # Tag 25: Frame Center Elevation (2 bytes, uint16, -900 to +19000 m)
-            elif tag == 25:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw / 65535.0) * 19900.0 - 900.0, raw_value
-                return raw_value, raw_value
-            
-            # Tag 34: Icing Detected (1 byte, uint8, 0-1 boolean)
-            elif tag == 34:
-                if len(data) == 1:
-                    return bool(data[0]), raw_value
-                return raw_value, raw_value
-            
-            # Tag 35: Wind Direction (2 bytes, uint16, 0-360°)
-            elif tag == 35:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 360.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 36: Wind Speed (1 byte, uint8, 0-100 m/s)
-            elif tag == 36:
-                if len(data) == 1:
-                    return struct.unpack('B', data)[0], raw_value
-                return raw_value, raw_value
-            
-            # Tag 37: Static Pressure (2 bytes, uint16, 0-5000 mbar)
-            elif tag == 37:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 5000.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 38: Density Altitude (2 bytes, uint16, -900 to +19000 m)
-            elif tag == 38:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw / 65535.0) * 19900.0 - 900.0, raw_value
-                return raw_value, raw_value
-            
-            # Tag 39: Outside Air Temperature (1 byte, int8, -128 to +127 °C)
-            elif tag == 39:
-                if len(data) == 1:
-                    return struct.unpack('b', data)[0], raw_value
-                return raw_value, raw_value
-            
-            # Tag 42: Target Location Elevation (2 bytes, uint16, -900 to +19000 m)
-            elif tag == 42:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw / 65535.0) * 19900.0 - 900.0, raw_value
-                return raw_value, raw_value
-            
-            # Tag 43: Target Track Gate Width (1 byte, uint8, 0-255 pixels)
-            elif tag == 43:
-                if len(data) == 1:
-                    return struct.unpack('B', data)[0], raw_value
-                return raw_value, raw_value
-            
-            # Tag 44: Target Track Gate Height (1 byte, uint8, 0-255 pixels)
-            elif tag == 44:
-                if len(data) == 1:
-                    return struct.unpack('B', data)[0], raw_value
-                return raw_value, raw_value
-            
-            # Tag 45: Target Error Estimate - CE90 (2 bytes, uint16, 0-4095 m)
-            elif tag == 45:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 4095.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 46: Target Error Estimate - LE90 (2 bytes, uint16, 0-4095 m)
-            elif tag == 46:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 4095.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 47: Generic Flag Data (1 byte, bitfield)
-            elif tag == 47:
-                if len(data) == 1:
-                    return struct.unpack('B', data)[0], raw_value
-                return raw_value, raw_value
-            
-            # Tag 48: Security Local Set (variable, nested KLV)
-            elif tag == 48:
-                return f"Security Local Set ({len(data)} bytes)", raw_value
-            
-            # Tag 49: Differential Pressure (2 bytes, uint16, 0-5000 mbar)
-            elif tag == 49:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 5000.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 50: Platform Angle of Attack (2 bytes, int16, -20 to +20°)
-            elif tag == 50:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw - 32767.5) * (40.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 51: Platform Vertical Speed (2 bytes, int16, -180 to +180 m/s)
-            elif tag == 51:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw - 32767.5) * (360.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 52: Platform Sideslip Angle (2 bytes, int16, -20 to +20°)
-            elif tag == 52:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw - 32767.5) * (40.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 53: Airfield Barometric Pressure (2 bytes, uint16, 0-5000 mbar)
-            elif tag == 53:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 5000.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 54: Airfield Elevation (2 bytes, uint16, -900 to +19000 m)
-            elif tag == 54:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw / 65535.0) * 19900.0 - 900.0, raw_value
-                return raw_value, raw_value
-            
-            # Tag 55: Relative Humidity (1 byte, uint8, 0-100%)
-            elif tag == 55:
-                if len(data) == 1:
-                    return struct.unpack('B', data)[0], raw_value
-                return raw_value, raw_value
-            
-            # Tag 56: Platform Ground Speed (1 byte, uint8, 0-255 m/s)
-            elif tag == 56:
-                if len(data) == 1:
-                    return struct.unpack('B', data)[0], raw_value
-                return raw_value, raw_value
-            
-            # Tag 57: Ground Range (4 bytes, uint32, 0-5000000 m)
-            elif tag == 57:
-                if len(data) == 4:
-                    raw = struct.unpack('>I', data)[0]
-                    return (raw * 5000000.0 / (2**32 - 1)), raw_value
-                return raw_value, raw_value
-            
-            # Tag 58: Platform Fuel Remaining (2 bytes, uint16, 0-10000 kg)
-            elif tag == 58:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 10000.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 60: Weapon Load (2 bytes, uint16, station/store)
-            elif tag == 60:
-                if len(data) == 2:
-                    return struct.unpack('>H', data)[0], raw_value
-                return raw_value, raw_value
-            
-            # Tag 61: Weapon Fired (1 byte, uint8, 0-1 boolean)
-            elif tag == 61:
-                if len(data) == 1:
-                    return bool(data[0]), raw_value
-                return raw_value, raw_value
-            
-            # Tag 62: Laser PRF Code (2 bytes, uint16)
-            elif tag == 62:
-                if len(data) == 2:
-                    return struct.unpack('>H', data)[0], raw_value
-                return raw_value, raw_value
-            
-            # Tag 64: Platform Magnetic Heading (2 bytes, uint16, 0-360°)
-            elif tag == 64:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 360.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 65: UAS Datalink LS Version Number (1 byte, uint8)
-            elif tag == 65:
-                if len(data) == 1:
-                    return struct.unpack('B', data)[0], raw_value
-                return raw_value, raw_value
-            
-            # Tag 66: Target Location Covariance Matrix (variable, nested)
-            elif tag == 66:
-                return f"Covariance Matrix ({len(data)} bytes)", raw_value
-            
-            # Tag 69: Alternate Platform Altitude (2 bytes, uint16, -900 to +19000 m)
-            elif tag == 69:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw / 65535.0) * 19900.0 - 900.0, raw_value
-                return raw_value, raw_value
-            
-            # Tag 71: Alternate Platform Heading (2 bytes, uint16, 0-360°)
-            elif tag == 71:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw * 360.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 72: Event Start Time - UTC (8 bytes, uint64 microseconds)
-            elif tag == 72:
-                if len(data) == 8:
-                    timestamp = struct.unpack('>Q', data)[0]
-                    return timestamp / 1000000.0, raw_value
-                return raw_value, raw_value
-            
-            # Tag 73: RVT Local Set (variable, nested KLV)
-            elif tag == 73:
-                return f"RVT Local Set ({len(data)} bytes)", raw_value
-            
-            # Tag 74: VMTI Local Set (variable, nested KLV)
-            elif tag == 74:
-                return f"VMTI Local Set ({len(data)} bytes)", raw_value
-            
-            # Tag 75: Sensor Ellipsoid Height (2 bytes, uint16, -900 to +19000 m)
-            elif tag == 75:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw / 65535.0) * 19900.0 - 900.0, raw_value
-                return raw_value, raw_value
-            
-            # Tag 76: Alternate Platform Ellipsoid Height (2 bytes, uint16, -900 to +19000 m)
-            elif tag == 76:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw / 65535.0) * 19900.0 - 900.0, raw_value
-                return raw_value, raw_value
-            
-            # Tag 78: Frame Center HAE (2 bytes, uint16, -900 to +19000 m)
-            elif tag == 78:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw / 65535.0) * 19900.0 - 900.0, raw_value
-                return raw_value, raw_value
-            
-            # Tag 79: Sensor North Velocity (2 bytes, int16, -327 to +327 m/s)
-            elif tag == 79:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw - 32767.5) * (654.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 80: Sensor East Velocity (2 bytes, int16, -327 to +327 m/s)
-            elif tag == 80:
-                if len(data) == 2:
-                    raw = struct.unpack('>H', data)[0]
-                    return (raw - 32767.5) * (654.0 / 65535.0), raw_value
-                return raw_value, raw_value
-            
-            # Tag 81: Image Horizon Pixel Pack (variable)
-            elif tag == 81:
-                return f"Image Horizon ({len(data)} bytes)", raw_value
-                    
-            # Default: return as hex string
-            else:
-                return raw_value, raw_value
-                
-        except Exception:
-            # Fallback to hex representation
-            return raw_value, raw_value
-    
+        item = self._decode_item(tag, data)
+        return item['value'], item['raw_value']
+
     def send_to_api(self, klv_data: Dict[str, Any]) -> bool:
-        """Send parsed KLV data to Node.js API"""
+        """Send parsed KLV data to the API"""
         if not REQUESTS_AVAILABLE:
             self.logger.warning("Requests library not available, cannot send to API")
             return False
-            
+
         try:
             url = f"{self.api_url}/api/klv/{self.stream_name}"
             response = requests.post(url, json=klv_data, timeout=5)
@@ -680,229 +649,210 @@ class UnifiedKLVParser:
         except Exception as e:
             self.logger.error(f"Failed to send KLV data to API: {e}")
             return False
-    
+
     def generate_test_klv(self) -> bytes:
-        """Generate test KLV packet for validation"""
-        # UAS Datalink Local Set key
-        key = b'\x06\x0e+4\x02\x0b\x01\x01\x0e\x01\x03\x01\x01\x00\x00\x00'
-        
-        # Create test tags
-        tags = []
-        
-        # UNIX timestamp (tag 2)
-        timestamp = int(time.time() * 1000000)
-        tags.append(b'\x02\x08' + struct.pack('>Q', timestamp))
-        
-        # Mission ID (tag 3)
-        mission_id = b'TEST_MISSION_001'
-        tags.append(b'\x03' + bytes([len(mission_id)]) + mission_id)
-        
-        # Platform latitude (tag 13) - example: 40.7128° N (NYC)
-        lat_raw = int(40.7128 * (2**31) / 180.0)
-        tags.append(b'\x0d\x04' + struct.pack('>i', lat_raw))
-        
-        # Platform longitude (tag 14) - example: -74.0060° W (NYC)
-        lon_raw = int(-74.0060 * (2**31) / 180.0)
-        tags.append(b'\x0e\x04' + struct.pack('>i', lon_raw))
-        
-        # Platform altitude (tag 15) - example: 1000 feet
-        alt_raw = int(1000.0) + 32768
-        tags.append(b'\x0f\x02' + struct.pack('>H', alt_raw))
-        
-        # Platform heading (tag 5) - example: 90 degrees (East)
-        heading_raw = int((90.0 + 180.0) * 65536.0 / 360.0)
-        tags.append(b'\x05\x02' + struct.pack('>H', heading_raw))
-        
-        # Horizontal FOV (tag 16) - example: 20 degrees
-        hfov_raw = int(20.0 * 65536.0 / 180.0)
-        tags.append(b'\x10\x02' + struct.pack('>H', hfov_raw))
-        
-        # Vertical FOV (tag 17) - example: 12 degrees  
-        vfov_raw = int(12.0 * 65536.0 / 180.0)
-        tags.append(b'\x11\x02' + struct.pack('>H', vfov_raw))
-        
-        # Frame Center Latitude (tag 23) - same as sensor for demo
-        tags.append(b'\x17\x04' + struct.pack('>i', lat_raw))
-        
-        # Frame Center Longitude (tag 24) - same as sensor for demo
-        tags.append(b'\x18\x04' + struct.pack('>i', lon_raw))
-        
-        # Frame Center Elevation (tag 25) - same as sensor for demo
-        tags.append(b'\x19\x02' + struct.pack('>H', alt_raw))
-        
-        # Combine all tags
-        tag_data = b''.join(tags)
-        
-        # Create length field
-        length = len(tag_data)
-        if length < 128:
-            length_field = bytes([length])
-        else:
-            # Long form encoding
-            length_bytes = []
-            temp_length = length
-            while temp_length > 0:
-                length_bytes.insert(0, temp_length & 0xFF)
-                temp_length >>= 8
-            length_field = bytes([0x80 | len(length_bytes)]) + bytes(length_bytes)
-        
-        return key + length_field + tag_data
-    
+        """Generate a test KLV packet for validation"""
+        return encode_uas_metadata({
+            'timestamp': int(time.time() * 1000000),
+            'mission_id': 'TEST_MISSION_001',
+            'platform_designation': 'Test Platform',
+            'image_source_sensor': 'EO Nose',
+            'platform_heading': 90.0,
+            'platform_pitch': -0.4315251,
+            'platform_roll': 3.405814,
+            'sensor_latitude': 40.7128,
+            'sensor_longitude': -74.0060,
+            'sensor_altitude': 1000.0,
+            'sensor_hfov': 20.0,
+            'sensor_vfov': 12.0,
+            'frame_center_latitude': 40.7128,
+            'frame_center_longitude': -74.0060,
+            'frame_center_elevation': 100.0,
+        })
+
     def run_test_mode(self):
         """Run parser in test mode"""
         print("=== Unified KLV Parser Test Mode ===")
-        
+
         # Generate test packet
         test_packet = self.generate_test_klv()
         print(f"Generated test packet: {len(test_packet)} bytes")
-        
+
         # Parse the packet
         parsed = self.parse_klv_packet(test_packet)
-        
+
         # Display results
+        print(f"\nChecksum valid: {parsed.get('checksum_valid')}")
         print("\nParsed KLV Data:")
         print(json.dumps(parsed, indent=2))
-        
+
         # Test API submission if available
         if self.stream_name and REQUESTS_AVAILABLE:
             print(f"\nTesting API submission to stream: {self.stream_name}")
             success = self.send_to_api(parsed)
             print(f"API submission: {'SUCCESS' if success else 'FAILED'}")
-    
+
     def run_stream_mode(self):
         """Run parser in stream processing mode"""
         print(f"=== Streaming KLV Parser for {self.stream_name} ===")
-        
+
         # In a real implementation, this would:
         # 1. Connect to the stream source
         # 2. Extract KLV data from the stream
         # 3. Parse and forward to API
         # 4. Handle errors gracefully
-        
+
         # For now, simulate with periodic test data
-        import time
-        
         try:
             while True:
                 test_packet = self.generate_test_klv()
                 parsed = self.parse_klv_packet(test_packet)
-                
+
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] Processed KLV packet")
-                
+
                 if self.send_to_api(parsed):
                     print(f"  -> Sent to API for stream: {self.stream_name}")
                 else:
                     print(f"  -> Failed to send to API")
-                
+
                 time.sleep(2)  # 2Hz update rate
-                
+
         except KeyboardInterrupt:
             print("\nShutting down KLV parser...")
 
+
+def _encode_item(tag: int, value: bytes) -> bytes:
+    """Encode one Local Set item: BER-OID key, BER length, value."""
+    return encode_ber_oid(tag) + encode_ber_length(len(value)) + value
+
+
+def _encode_string_item(tag: int, text: str, max_bytes: int = 127) -> bytes:
+    return _encode_item(tag, str(text).encode('utf-8')[:max_bytes])
+
+
+def _encode_angle(metadata: Dict[str, Any], key: str,
+                  legacy_tag: int, full_tag: int) -> bytes:
+    """
+    Encode a platform angle using one representation only.
+
+    ST 0601.19 s6.3 prefers the full-range item; the range-restricted item is
+    kept for values it can actually carry so legacy readers still see them.
+    """
+    value = float(metadata[key])
+    legacy_hi = ST0601_ITEMS[legacy_tag]['hi']
+    if abs(value) <= legacy_hi:
+        return _encode_item(legacy_tag, encode_int_mapped(value, legacy_hi, 2))
+    return _encode_item(full_tag, encode_int_mapped(value, ST0601_ITEMS[full_tag]['hi'], 4))
+
+
 def encode_uas_metadata(metadata: Dict[str, Any]) -> bytes:
     """
-    Encode UAS metadata into STANAG 4609 KLV format
-    
-    Uses manual encoding with proper MISB ST 0601 compliance.
-    The klvdata library is primarily a parser, not an encoder, so we use
-    our own implementation following the STANAG 4609 specifications.
-    
+    Encode UAS metadata into a MISB ST 0601 UAS Datalink Local Set packet.
+
+    Items are written in ascending order and the packet always carries the two
+    items ST 0601 requires: item 2 (Precision Time Stamp) and item 1 (Checksum),
+    plus item 65 (version number). The deprecated item 66 is never generated.
+
     Args:
-        metadata: Dictionary with UAS metadata fields
-            Required: timestamp (microseconds since epoch)
-            Optional: mission_id, platform_designation, coordinates, etc.
-    
+        metadata: dict of UAS metadata fields
+            timestamp (microseconds since epoch; defaults to now)
+            mission_id, platform_tail_number, platform_designation,
+            image_source_sensor, image_coordinate_system, platform_call_sign
+            platform_heading, platform_pitch, platform_roll (degrees)
+            platform_true_airspeed, platform_ground_speed (m/s)
+            sensor_latitude, sensor_longitude (degrees), sensor_altitude (m)
+            sensor_hfov, sensor_vfov (degrees)
+            sensor_relative_azimuth, sensor_relative_elevation,
+            sensor_relative_roll (degrees), slant_range (m)
+            frame_center_latitude, frame_center_longitude (degrees),
+            frame_center_elevation (m)
+            target_latitude, target_longitude (degrees), target_elevation (m)
+            operational_mode (0-5), core_identifier (ST 1204 bytes or hex string)
+            version (ST 0601 revision written to item 65)
+
     Returns:
-        KLV packet bytes with proper MISB ST 0601 encoding
+        KLV packet bytes
     """
-    # UAS Datalink Local Set key (16 bytes) - MISB ST 0601
-    key = b'\x06\x0e\x2b\x34\x02\x0b\x01\x01\x0e\x01\x03\x01\x01\x00\x00\x00'
-    
-    tags = []
-    
-    # UNIX timestamp (tag 2) - REQUIRED - microseconds since epoch
-    if 'timestamp' in metadata:
-        timestamp = int(metadata['timestamp'])
-        tags.append(b'\x02\x08' + struct.pack('>Q', timestamp))
-    
-    # Mission ID (tag 3) - UTF-8 string, max 127 bytes
+    items: List[bytes] = []
+
+    timestamp = int(metadata.get('timestamp', time.time() * 1000000))
+    items.append(_encode_item(2, struct.pack('>Q', timestamp)))
+
     if 'mission_id' in metadata:
-        mission_id = str(metadata['mission_id']).encode('utf-8')[:127]
-        tags.append(b'\x03' + bytes([len(mission_id)]) + mission_id)
-    
-    # Platform Heading Angle (tag 5) - degrees, mapped to 0-360
+        items.append(_encode_string_item(3, metadata['mission_id']))
+    if 'platform_tail_number' in metadata:
+        items.append(_encode_string_item(4, metadata['platform_tail_number']))
     if 'platform_heading' in metadata:
-        heading = float(metadata['platform_heading'])
-        # MISB ST 0601: Map from -180/+180 to 0-65535
-        heading_raw = int((heading + 180.0) * 65536.0 / 360.0) & 0xFFFF
-        tags.append(b'\x05\x02' + struct.pack('>H', heading_raw))
-    
-    # Platform Designation (tag 10) - UTF-8 string, max 127 bytes
+        items.append(_encode_item(5, encode_uint_mapped(metadata['platform_heading'], 0.0, 360.0, 2)))
+    if 'platform_pitch' in metadata:
+        items.append(_encode_angle(metadata, 'platform_pitch', 6, 90))
+    if 'platform_roll' in metadata:
+        items.append(_encode_angle(metadata, 'platform_roll', 7, 91))
+    if 'platform_true_airspeed' in metadata:
+        items.append(_encode_item(8, bytes([max(0, min(255, int(metadata['platform_true_airspeed'])))])))
     if 'platform_designation' in metadata:
-        platform = str(metadata['platform_designation']).encode('utf-8')[:127]
-        tags.append(b'\x0a' + bytes([len(platform)]) + platform)
-    
-    # Sensor Latitude (tag 13) - degrees, IMAPB encoding
+        items.append(_encode_string_item(10, metadata['platform_designation']))
+    if 'image_source_sensor' in metadata:
+        items.append(_encode_string_item(11, metadata['image_source_sensor']))
+    if 'image_coordinate_system' in metadata:
+        items.append(_encode_string_item(12, metadata['image_coordinate_system']))
     if 'sensor_latitude' in metadata:
-        lat = float(metadata['sensor_latitude'])
-        # MISB ST 0601: Map -90/+90 to -(2^31-1)/(2^31-1)
-        lat_raw = int(lat * (2**31) / 180.0)
-        tags.append(b'\x0d\x04' + struct.pack('>i', lat_raw))
-    
-    # Sensor Longitude (tag 14) - degrees, IMAPB encoding
+        items.append(_encode_item(13, encode_int_mapped(metadata['sensor_latitude'], 90.0, 4)))
     if 'sensor_longitude' in metadata:
-        lon = float(metadata['sensor_longitude'])
-        # MISB ST 0601: Map -180/+180 to -(2^31-1)/(2^31-1)
-        lon_raw = int(lon * (2**31) / 180.0)
-        tags.append(b'\x0e\x04' + struct.pack('>i', lon_raw))
-    
-    # Sensor True Altitude (tag 15) - meters, IMAPB encoding
+        items.append(_encode_item(14, encode_int_mapped(metadata['sensor_longitude'], 180.0, 4)))
     if 'sensor_altitude' in metadata:
-        alt = float(metadata['sensor_altitude'])
-        # MISB ST 0601: Map -900/+19000 meters to 0-65535
-        alt_normalized = (alt - (-900.0)) / (19000.0 - (-900.0))
-        alt_raw = int(alt_normalized * 65535.0)
-        alt_raw = max(0, min(65535, alt_raw))  # Clamp to valid range
-        tags.append(b'\x0f\x02' + struct.pack('>H', alt_raw))
-    
-    # Frame Center Latitude (tag 23) - degrees, IMAPB encoding
+        items.append(_encode_item(15, encode_uint_mapped(metadata['sensor_altitude'], -900.0, 19000.0, 2)))
+    if 'sensor_hfov' in metadata:
+        items.append(_encode_item(16, encode_uint_mapped(metadata['sensor_hfov'], 0.0, 180.0, 2)))
+    if 'sensor_vfov' in metadata:
+        items.append(_encode_item(17, encode_uint_mapped(metadata['sensor_vfov'], 0.0, 180.0, 2)))
+    if 'sensor_relative_azimuth' in metadata:
+        items.append(_encode_item(18, encode_uint_mapped(metadata['sensor_relative_azimuth'], 0.0, 360.0, 4)))
+    if 'sensor_relative_elevation' in metadata:
+        items.append(_encode_item(19, encode_int_mapped(metadata['sensor_relative_elevation'], 180.0, 4)))
+    if 'sensor_relative_roll' in metadata:
+        items.append(_encode_item(20, encode_uint_mapped(metadata['sensor_relative_roll'], 0.0, 360.0, 4)))
+    if 'slant_range' in metadata:
+        items.append(_encode_item(21, encode_uint_mapped(metadata['slant_range'], 0.0, 5000000.0, 4)))
     if 'frame_center_latitude' in metadata:
-        lat = float(metadata['frame_center_latitude'])
-        lat_raw = int(lat * (2**31) / 180.0)
-        tags.append(b'\x17\x04' + struct.pack('>i', lat_raw))
-    
-    # Frame Center Longitude (tag 24) - degrees, IMAPB encoding
+        items.append(_encode_item(23, encode_int_mapped(metadata['frame_center_latitude'], 90.0, 4)))
     if 'frame_center_longitude' in metadata:
-        lon = float(metadata['frame_center_longitude'])
-        lon_raw = int(lon * (2**31) / 180.0)
-        tags.append(b'\x18\x04' + struct.pack('>i', lon_raw))
-    
-    # Frame Center Elevation (tag 25) - meters, IMAPB encoding
+        items.append(_encode_item(24, encode_int_mapped(metadata['frame_center_longitude'], 180.0, 4)))
     if 'frame_center_elevation' in metadata:
-        elev = float(metadata['frame_center_elevation'])
-        # MISB ST 0601: Map -900/+19000 meters to 0-65535
-        elev_normalized = (elev - (-900.0)) / (19000.0 - (-900.0))
-        elev_raw = int(elev_normalized * 65535.0)
-        elev_raw = max(0, min(65535, elev_raw))  # Clamp to valid range
-        tags.append(b'\x19\x02' + struct.pack('>H', elev_raw))
-    
-    # Combine all tags
-    tag_data = b''.join(tags)
-    
-    # Create BER length field
-    length = len(tag_data)
-    if length < 128:
-        length_field = bytes([length])
-    else:
-        # Long form BER encoding
-        length_bytes = []
-        temp_length = length
-        while temp_length > 0:
-            length_bytes.insert(0, temp_length & 0xFF)
-            temp_length >>= 8
-        length_field = bytes([0x80 | len(length_bytes)]) + bytes(length_bytes)
-    
-    return key + length_field + tag_data
+        items.append(_encode_item(25, encode_uint_mapped(metadata['frame_center_elevation'], -900.0, 19000.0, 2)))
+    if 'target_latitude' in metadata:
+        items.append(_encode_item(40, encode_int_mapped(metadata['target_latitude'], 90.0, 4)))
+    if 'target_longitude' in metadata:
+        items.append(_encode_item(41, encode_int_mapped(metadata['target_longitude'], 180.0, 4)))
+    if 'target_elevation' in metadata:
+        items.append(_encode_item(42, encode_uint_mapped(metadata['target_elevation'], -900.0, 19000.0, 2)))
+    if 'platform_ground_speed' in metadata:
+        items.append(_encode_item(56, bytes([max(0, min(255, int(metadata['platform_ground_speed'])))])))
+    if 'platform_call_sign' in metadata:
+        items.append(_encode_string_item(59, metadata['platform_call_sign']))
+
+    # Item 65 - version of ST 0601 this metadata was generated against
+    version = int(metadata.get('version', ST0601_VERSION))
+    items.append(_encode_item(65, bytes([max(0, min(255, version))])))
+
+    if 'operational_mode' in metadata:
+        items.append(_encode_item(77, bytes([int(metadata['operational_mode']) & 0xFF])))
+
+    # Item 94 - MIIS Core Identifier (ST 1204), required by ST 0902
+    core_id = metadata.get('core_identifier')
+    if core_id:
+        if isinstance(core_id, str):
+            core_id = bytes.fromhex(core_id)
+        items.append(_encode_item(94, bytes(core_id)))
+
+    payload = b''.join(items)
+
+    # Item 1 (Checksum) is the last item and covers the whole packet including
+    # the 16-byte key and its own key/length bytes (ST 0601.19 s6.8).
+    checksum_header = encode_ber_oid(1) + encode_ber_length(2)
+    length_field = encode_ber_length(len(payload) + len(checksum_header) + 2)
+    prefix = UAS_LOCAL_SET_KEY + length_field + payload + checksum_header
+    return prefix + struct.pack('>H', compute_checksum(prefix))
 
 
 def main():
@@ -914,15 +864,15 @@ def main():
                        help='Stream name for processing mode')
     parser.add_argument('--api-url', type=str, default='http://localhost:3000',
                        help='API base URL')
-    
+
     args = parser.parse_args()
-    
+
     # Create parser instance
     klv_parser = UnifiedKLVParser(
         stream_name=args.stream,
         api_url=args.api_url
     )
-    
+
     # Run in specified mode
     if args.mode == 'test':
         klv_parser.run_test_mode()
@@ -931,6 +881,7 @@ def main():
             print("Error: --stream required for stream mode")
             sys.exit(1)
         klv_parser.run_stream_mode()
+
 
 if __name__ == '__main__':
     main()

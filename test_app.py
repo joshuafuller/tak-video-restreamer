@@ -838,6 +838,159 @@ class TestKLVTimestampRepairSetting:
         assert 'mpegts' in args
 
 
+class TestPullStreamTimeouts:
+    """RTSP inputs must not be handed options the RTSP demuxer rejects"""
+
+    def test_rtsp_uses_timeout_only(self):
+        """-rw_timeout aborts an RTSP input on FFmpeg 7.x ('Option not found')"""
+        from app.api.streams import _build_pull_ffmpeg_args
+
+        args = _build_pull_ffmpeg_args('rtsp://camera.local:8554/live', 'drone1')
+        assert '-timeout' in args
+        assert '-rw_timeout' not in args
+        assert '-reconnect' not in args
+
+    def test_rtsps_uses_timeout_only(self):
+        from app.api.streams import _build_pull_ffmpeg_args
+
+        args = _build_pull_ffmpeg_args('rtsps://camera.local:8322/live', 'drone1')
+        assert '-rw_timeout' not in args
+
+    def test_http_keeps_rw_timeout(self):
+        """-rw_timeout is an AVIO option, so it is valid for the HTTP handler"""
+        from app.api.streams import _build_pull_ffmpeg_args
+
+        args = _build_pull_ffmpeg_args('http://host/live.m3u8', 'drone1')
+        assert '-rw_timeout' in args
+
+
+class TestKLVParsing:
+    """MISB ST 0601.19 conformance of shared/klv.py"""
+
+    @pytest.fixture
+    def parser(self):
+        from shared.klv import UnifiedKLVParser
+        return UnifiedKLVParser()
+
+    def value(self, parser, tag, hex_bytes):
+        return parser._decode_item(tag, bytes.fromhex(hex_bytes))['value']
+
+    def test_worked_examples_from_the_standard(self, parser):
+        assert self.value(parser, 5, '71C2') == pytest.approx(159.9744, abs=1e-4)
+        assert self.value(parser, 7, '08B8') == pytest.approx(3.405814, abs=1e-4)
+        assert self.value(parser, 13, '5595B66D') == pytest.approx(60.1768229669783, abs=1e-9)
+        assert self.value(parser, 15, 'C221') == pytest.approx(14190.72, abs=1e-2)
+        assert self.value(parser, 16, 'CD9C') == pytest.approx(144.5713, abs=1e-4)
+        assert self.value(parser, 21, '03830926') == pytest.approx(68590.98, abs=1e-2)
+        assert self.value(parser, 36, 'B2') == pytest.approx(69.80392, abs=1e-4)
+        assert self.value(parser, 55, '81') == pytest.approx(50.58823, abs=1e-4)
+
+    def test_pitch_and_roll_have_different_ranges(self, parser):
+        """Pitch is +/-20, roll is +/-50, both scaled to 65534 - not 65535"""
+        assert self.value(parser, 6, '7FFF') == pytest.approx(20.0)
+        assert self.value(parser, 7, '7FFF') == pytest.approx(50.0)
+        assert self.value(parser, 50, '7FFF') == pytest.approx(20.0)
+        assert self.value(parser, 51, '7FFF') == pytest.approx(180.0)
+        assert self.value(parser, 79, '7FFF') == pytest.approx(327.0)
+
+    def test_out_of_range_indicator(self, parser):
+        """-(2^(n-1)) means 'out of range', not a legitimate extreme value"""
+        item = parser._decode_item(6, bytes.fromhex('8000'))
+        assert item['value'] is None
+        assert item['out_of_range'] is True
+        assert parser._decode_item(13, bytes.fromhex('80000000'))['value'] is None
+
+    def test_offset_corners_are_two_byte_offsets(self, parser):
+        """Items 26-33 are +/-0.075 degree offsets from frame centre, not coordinates"""
+        assert self.value(parser, 26, '7FFF') == pytest.approx(0.075)
+        assert self.value(parser, 27, '8001') == pytest.approx(-0.075)
+        assert self.value(parser, 26, '8000') is None
+
+    def test_offset_corner_resolved_against_frame_centre(self, parser):
+        from shared import klv
+
+        payload = (klv.encode_ber_oid(23) + klv.encode_ber_length(4) +
+                   klv.encode_int_mapped(40.0, 90.0, 4) +
+                   klv.encode_ber_oid(26) + klv.encode_ber_length(2) +
+                   klv.encode_int_mapped(0.05, 0.075, 2))
+        packet = klv.UAS_LOCAL_SET_KEY + klv.encode_ber_length(len(payload)) + payload
+
+        corner = [i for i in parser.parse_klv_packet(packet)['items'] if i['tag_id'] == 26][0]
+        assert corner['value'] == pytest.approx(0.05, abs=1e-5)
+        assert corner['absolute_value'] == pytest.approx(40.05, abs=1e-5)
+
+    def test_latitude_longitude_are_per_item_not_odd_even(self, parser):
+        """Item 40 is a latitude and item 41 a longitude - the parity rule is wrong"""
+        assert self.value(parser, 40, '7FFFFFFF') == pytest.approx(90.0)
+        assert self.value(parser, 41, '7FFFFFFF') == pytest.approx(180.0)
+        assert self.value(parser, 82, '7FFFFFFF') == pytest.approx(90.0)
+        assert self.value(parser, 83, '7FFFFFFF') == pytest.approx(180.0)
+
+    def test_operational_mode_is_an_enumeration(self, parser):
+        assert self.value(parser, 77, '03') == {'code': 3, 'name': 'Exercise'}
+        assert self.value(parser, 77, 'FF') == {'code': 255, 'name': 'Reserved'}
+        assert self.value(parser, 63, '02') == {'code': 2, 'name': 'Medium'}
+
+    def test_item_keys_are_ber_oid(self):
+        """Keys are BER-OID (ST 0601.19 7.1); lengths stay BER"""
+        from shared import klv
+
+        assert klv.encode_ber_oid(142) == bytes.fromhex('810e')
+        assert klv.decode_ber_oid(bytes.fromhex('810e'))[0] == 142
+        assert klv.encode_ber_length(128) == bytes.fromhex('8180')
+
+    def test_generated_packet_carries_a_valid_checksum(self, parser):
+        from shared.klv import encode_uas_metadata
+
+        packet = encode_uas_metadata({'timestamp': 1_500_000_000_000_000,
+                                      'sensor_latitude': 60.1768229669783})
+        parsed = parser.parse_klv_packet(packet)
+        assert parsed.get('error') is None
+        assert parsed['checksum_valid'] is True
+        assert parsed['items'][-1]['tag_id'] == 1
+
+    def test_corrupt_packet_fails_its_checksum(self, parser):
+        from shared.klv import encode_uas_metadata
+
+        packet = bytearray(encode_uas_metadata({'timestamp': 1_500_000_000_000_000,
+                                                'mission_id': 'MISSION-42'}))
+        packet[33] ^= 0xFF  # a byte inside the mission ID, not a length field
+        assert parser.parse_klv_packet(bytes(packet))['checksum_valid'] is False
+
+    def test_deprecated_item_66_is_never_generated(self, parser):
+        from shared.klv import encode_uas_metadata
+
+        parsed = parser.parse_klv_packet(encode_uas_metadata({'timestamp': 1}))
+        assert all(item['tag_id'] != 66 for item in parsed['items'])
+        assert [i['value'] for i in parsed['items'] if i['tag_id'] == 65] == [19]
+
+    def test_repeated_items_are_not_lost(self, parser):
+        """Order matters for repeatable items such as SDCC-FLP (item 102)"""
+        from shared import klv
+
+        payload = (klv.encode_ber_oid(102) + klv.encode_ber_length(2) + b'\x01\x02' +
+                   klv.encode_ber_oid(102) + klv.encode_ber_length(2) + b'\x03\x04')
+        packet = klv.UAS_LOCAL_SET_KEY + klv.encode_ber_length(len(payload)) + payload
+
+        parsed = parser.parse_klv_packet(packet)
+        assert [i['raw_value'] for i in parsed['items']] == ['0102', '0304']
+        assert sorted(parsed['tags']) == ['SDCC-FLP', 'SDCC-FLP #2']
+
+    def test_items_beyond_89_are_known(self, parser):
+        """ST 0601.19 defines items past 89, including ones ST 0902 requires"""
+        from shared.klv import STANAG_4609_TAGS
+
+        assert STANAG_4609_TAGS[94] == 'MIIS Core Identifier'
+        assert STANAG_4609_TAGS[142] == 'View Domain'
+        assert self.value(parser, 90, '7FFFFFFF') == pytest.approx(90.0)
+
+    def test_undecoded_items_are_flagged_not_guessed(self, parser):
+        item = parser._decode_item(103, bytes.fromhex('0102'))
+        assert item['name'] == 'Density Altitude Extended'
+        assert item['decoded'] is False
+        assert item['value'] == '0102'
+
+
 class TestTranscodeOptions:
     """Option list must not advertise anything the backend cannot run"""
 

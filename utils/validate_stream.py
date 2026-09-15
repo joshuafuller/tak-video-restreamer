@@ -386,12 +386,50 @@ def check_st0601(target, streams, window, timeout):
         return _check('st0601', 'ST 0601 decodes', WARN,
                       f'Found {count} KLV packets but the first failed to parse: {e}')
 
+    # ST 0601.19 makes item 1 (Checksum) mandatory, so sample a few packets and
+    # see whether they carry one and whether it verifies.
+    checked = good = bad = missing = 0
+    pos = offset
+    while pos != -1 and checked < 50:
+        try:
+            sample = parser.parse_klv_packet(blob[pos:])
+        except Exception:
+            break
+        valid = sample.get('checksum_valid')
+        if valid is None:
+            missing += 1
+        elif valid:
+            good += 1
+        else:
+            bad += 1
+        checked += 1
+        pos = blob.find(STANAG_UL, pos + 1)
+
     rate = count / window if window else 0
-    return _check(
-        'st0601', 'ST 0601 decodes', PASS,
-        f'{count} ST 0601 packets in {window}s (~{rate:.1f} Hz), {tags} tags in first packet.',
-        detail={'packets': count, 'rate_hz': round(rate, 2), 'tags_first_packet': tags},
-    )
+    summary = f'{count} ST 0601 packets in {window}s (~{rate:.1f} Hz), {tags} tags in first packet.'
+    detail = {
+        'packets': count, 'rate_hz': round(rate, 2), 'tags_first_packet': tags,
+        'checksums_checked': checked, 'checksums_ok': good,
+        'checksums_bad': bad, 'checksums_missing': missing,
+    }
+
+    if bad:
+        return _check(
+            'st0601', 'ST 0601 decodes', WARN,
+            summary + f' {bad}/{checked} sampled packets fail their ST 0601 checksum.',
+            'A packet whose checksum does not match must be discarded by a conforming reader '
+            '(ST 0601.19 s6.1), so downstream clients may drop this metadata.', detail,
+        )
+    if missing and not good:
+        return _check(
+            'st0601', 'ST 0601 decodes', WARN,
+            summary + ' No packet carries item 1 (Checksum).',
+            'ST 0601.19 requires the checksum item on every UAS Local Set packet. Strict '
+            'readers may reject metadata without it.', detail,
+        )
+
+    return _check('st0601', 'ST 0601 decodes', PASS,
+                  summary + f' {good}/{checked} sampled checksums verify.', detail=detail)
 
 
 # --------------------------------------------------------------------------
