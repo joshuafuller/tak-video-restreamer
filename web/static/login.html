@@ -11,6 +11,9 @@ This is distributed in the hope that it will be useful, but without any warranty
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - TAK Video Restreamer</title>
+    <!-- Shared UMT visual language (vendored; see umt-shared.README.md).
+         Must load before styles.css, which layers this app on top of it. -->
+    <link rel="stylesheet" href="/static/umt-shared.css">
     <link rel="stylesheet" href="/static/styles.css">
     <style>
         body {
@@ -85,10 +88,10 @@ This is distributed in the hope that it will be useful, but without any warranty
             transition: background 0.2s;
         }
         .login-btn:hover {
-            background: #2563eb;
+            background: var(--accent-dark);
         }
         .error-msg {
-            background: rgba(239, 68, 68, 0.15);
+            background: var(--tint-danger);
             border: 1px solid var(--accent-danger);
             color: var(--accent-danger);
             padding: 0.6rem 0.85rem;
@@ -98,7 +101,7 @@ This is distributed in the hope that it will be useful, but without any warranty
             display: none;
         }
         .warning-banner {
-            background: rgba(245, 158, 11, 0.15);
+            background: var(--tint-warn);
             border: 1px solid var(--accent-warning);
             color: var(--accent-warning);
             padding: 0.6rem 0.85rem;
@@ -118,7 +121,7 @@ This is distributed in the hope that it will be useful, but without any warranty
         </div>
 
         <div id="default-pw-warning" class="warning-banner" style="display: none;">
-            ⚠️ Default password in use. Set <code style="background: rgba(0,0,0,0.2); padding: 0.1rem 0.3rem; border-radius: 3px;">ADMIN_PASSWORD</code> in docker-compose.yml and restart the container.
+            ⚠️ Default password in use. Set <code style="background: rgba(8, 15, 23, 0.35); padding: 0.1rem 0.3rem; border-radius: 3px;">ADMIN_PASSWORD</code> in docker-compose.yml and restart the container.
         </div>
 
         <div id="error-msg" class="error-msg"></div>

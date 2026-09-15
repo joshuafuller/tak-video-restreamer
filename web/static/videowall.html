@@ -13,6 +13,9 @@ This is distributed in the hope that it will be useful, but without any warranty
     <title>Video Wall — TAK Video Restreamer</title>
     <script src="/static/socket.io.min.js"></script>
     <script src="/static/hls.min.js"></script>
+    <!-- Shared UMT visual language (vendored; see umt-shared.README.md).
+         Must load before styles.css, which layers this app on top of it. -->
+    <link rel="stylesheet" href="/static/umt-shared.css">
     <link rel="stylesheet" href="/static/styles.css">
     <style>
         /* Page-level overrides: full-screen layout, no scroll */
@@ -22,6 +25,11 @@ This is distributed in the hope that it will be useful, but without any warranty
 </head>
 <body>
     <div class="container">
+        <!-- ═══ APP CHROME — REMOVE WHEN THIS BECOMES A UMT MODULE ═══
+             UMT sub-apps render in an iframe under the shell's ribbon, which
+             supplies the branding and the nav. This masthead is what makes the
+             app standalone; under the shell it would be dropped and <main>
+             promoted. Matching marker in styles.css. -->
         <header>
             <div class="header-content">
                 <div class="header-title">

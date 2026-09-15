@@ -11,10 +11,18 @@ This is distributed in the hope that it will be useful, but without any warranty
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Test Video Input - Video Restreamer</title>
+    <!-- Shared UMT visual language (vendored; see umt-shared.README.md).
+         Must load before styles.css, which layers this app on top of it. -->
+    <link rel="stylesheet" href="/static/umt-shared.css">
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
     <div class="container">
+        <!-- ═══ APP CHROME — REMOVE WHEN THIS BECOMES A UMT MODULE ═══
+             UMT sub-apps render in an iframe under the shell's ribbon, which
+             supplies the branding and the nav. This masthead is what makes the
+             app standalone; under the shell it would be dropped and <main>
+             promoted. Matching marker in styles.css. -->
         <header>
             <div class="header-content">
                 <div class="header-title">
@@ -114,7 +122,7 @@ This is distributed in the hope that it will be useful, but without any warranty
                 <button class="btn btn-danger" id="stop-test" onclick="stopTest()" disabled>Stop Test</button>
                 <button class="btn btn-secondary" onclick="clearConsole()">Clear Console</button>
 
-                <div id="elapsed-bar" style="display: none; margin-top: 1rem; padding: 0.75rem 1rem; background: var(--bg-secondary); border-radius: 8px; font-family: monospace; font-size: 1.1em; text-align: center;">
+                <div id="elapsed-bar" style="display: none; margin-top: 1rem; padding: 0.75rem 1rem; background: var(--surface-strong); border-radius: 8px; font-family: monospace; font-size: 1.1em; text-align: center;">
                     <span id="elapsed-label">Elapsed:</span> <strong id="elapsed-time">00:00</strong>
                 </div>
 

@@ -11,10 +11,18 @@ This is distributed in the hope that it will be useful, but without any warranty
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Utils - Video Transcoding</title>
+    <!-- Shared UMT visual language (vendored; see umt-shared.README.md).
+         Must load before styles.css, which layers this app on top of it. -->
+    <link rel="stylesheet" href="/static/umt-shared.css">
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
     <div class="container">
+        <!-- ═══ APP CHROME — REMOVE WHEN THIS BECOMES A UMT MODULE ═══
+             UMT sub-apps render in an iframe under the shell's ribbon, which
+             supplies the branding and the nav. This masthead is what makes the
+             app standalone; under the shell it would be dropped and <main>
+             promoted. Matching marker in styles.css. -->
         <header>
             <div class="header-content">
                 <div class="header-title">
@@ -52,7 +60,7 @@ This is distributed in the hope that it will be useful, but without any warranty
         <main class="main-layout">
             <section class="card">
                 <h2>Video Utilities</h2>
-                <p style="color: #888; margin-bottom: 1.5rem;">
+                <p style="color: var(--text-muted); margin-bottom: 1.5rem;">
                     Transcode recordings with timecode correction and optional STANAG 4609 KLV sidecar files
                 </p>
 
@@ -188,7 +196,7 @@ This is distributed in the hope that it will be useful, but without any warranty
                 // Show error in UI
                 const container = document.getElementById('recordings-list');
                 if (container) {
-                    container.innerHTML = `<div class="empty-state" style="color: #f44336;">Error loading recordings: ${error.message}</div>`;
+                    container.innerHTML = `<div class="empty-state" style="color: var(--danger);">Error loading recordings: ${error.message}</div>`;
                 }
             }
         }
@@ -415,7 +423,7 @@ This is distributed in the hope that it will be useful, but without any warranty
                     
                     ${job.status === 'completed' ? `
                         <div class="progress-bar">
-                            <div class="progress-fill" style="width: 100%; background: #4CAF50;"></div>
+                            <div class="progress-fill" style="width: 100%; background: var(--good);"></div>
                         </div>
                     ` : ''}
                     
